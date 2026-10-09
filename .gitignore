@@ -1,0 +1,85 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# ---------- 依赖 ----------
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# ---------- 测试 ----------
+/coverage
+
+# ---------- Next.js ----------
+/.next/
+/out/
+/build
+
+# ---------- 杂项 ----------
+.DS_Store
+*.pem
+Thumbs.db
+
+# ---------- 日志 ----------
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+*.log
+
+# ---------- 环境变量：只提交 .env.example ----------
+.env
+.env.*
+!.env.example
+!.env.local.example
+
+# ---------- Vercel ----------
+.vercel
+
+# ---------- TypeScript ----------
+*.tsbuildinfo
+next-env.d.ts
+
+# ============================================================
+#  隐私与密钥：绝对不要提交
+# ============================================================
+
+# 网易云 / QQ音乐 / 酷狗 登录凭证（等同于账号钥匙）
+backend/data/netease_cookie.txt
+_tools/_music_u.txt
+_tools/_netease_cookie_full.txt
+
+# 后端产出的运行数据与日志
+backend/data/*.json
+backend/data/*.log
+backend/backend.log
+backend/__pycache__/
+_tools/*.log
+
+# 用户自己上传的照片 / 视频 / 音频（个人资料）
+backend/media/uploads/
+backend/media/audio/
+
+# 个人资料：简历、证件照、抓取下来的页面
+_tools/resume.txt
+_tools/media/
+
+# 开发期的一次性脚本与临时产物
+_tools/boot60/
+_redact.ps1
+_redact_backup/
+
+# ---------- 大体积素材：不进仓库（本地保留） ----------
+/public/images/
+/public/music/
+/public/videos/
+/public/live2d/
+
+# ---------- 本机运维脚本：不进仓库 ----------
+_tools/make_history.py
+_tools/rebuild_history.py
+_tools/scrub_identity.py
+tools/push-v1.bat
