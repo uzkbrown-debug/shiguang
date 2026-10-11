@@ -1,0 +1,545 @@
+// 拾光 · 本地演示数据层（比赛版 demo dataset，暂不接后端）
+// 结构与方案文档 8.1 / 8.2 保持一致：memory / media / person / location / story
+
+export type TimePrecision = "exact" | "day" | "month" | "year" | "unknown";
+export type AiStatus = "pending" | "processing" | "confirmed" | "failed";
+export type SourceType = "photo" | "text" | "document" | "video";
+
+export interface ShiguangPerson {
+  id: string;
+  name: string;
+  relationLabel: string;
+  avatar: string;
+  aliases: string[];
+  /** 间接关系：这个人是通过谁认识的（王盈芳的闺蜜 → viaName 是王盈芳） */
+  viaId?: string;
+  viaName?: string;
+  viaLabel?: string;
+}
+
+export interface ShiguangLocation {
+  id: string;
+  name: string;
+  city: string;
+  region: string;
+  country: string;
+  latitude: number;
+  longitude: number;
+  precision: "point" | "city" | "region";
+}
+
+export interface ShiguangMemory {
+  id: string;
+  title: string;
+  summary: string;
+  content: string;
+  happenedAt: string;
+  timePrecision: TimePrecision;
+  locationId: string;
+  personIds: string[];
+  tags: string[];
+  emotion: string;
+  importance: 1 | 2 | 3 | 4 | 5;
+  sourceType: SourceType;
+  cover: string;
+  aiStatus: AiStatus;
+  confidence: number;
+  aiGenerated: boolean;
+  mediaCount: number;
+}
+
+export interface ShiguangStory {
+  id: string;
+  title: string;
+  subtitle: string;
+  cover: string;
+  memoryIds: string[];
+  poem: string;
+  visibility: "private" | "link" | "public";
+  createdAt: string;
+}
+
+const IMG = [
+  "/images/1.webp",
+  "/images/2.webp",
+  "/images/20.webp",
+  "/images/34.webp",
+  "/images/36.webp",
+  "/images/39.webp",
+  "/images/41.webp",
+  "/images/42.webp",
+  "/images/55.webp",
+  "/images/57.webp",
+  "/images/58.webp",
+  "/images/60.webp",
+  "/images/61.webp",
+  "/images/63.webp",
+  "/images/119.webp",
+  "/images/121.webp",
+  "/images/127.webp",
+  "/images/130.webp",
+  "/images/133.webp",
+  "/images/134.webp",
+];
+
+export const locations: ShiguangLocation[] = [
+  { id: "loc_xiamen", name: "厦门", city: "厦门市", region: "示例省", country: "中国", latitude: 24.4798, longitude: 118.0894, precision: "city" },
+  { id: "loc_chengdu", name: "成都", city: "成都市", region: "四川省", country: "中国", latitude: 30.5728, longitude: 104.0668, precision: "city" },
+  { id: "loc_hangzhou", name: "杭州", city: "杭州市", region: "浙江省", country: "中国", latitude: 30.2741, longitude: 120.1551, precision: "city" },
+  { id: "loc_xian", name: "西安", city: "西安市", region: "陕西省", country: "中国", latitude: 34.3416, longitude: 108.9398, precision: "city" },
+  { id: "loc_chongqing", name: "重庆", city: "重庆市", region: "重庆市", country: "中国", latitude: 29.563, longitude: 106.5516, precision: "city" },
+  { id: "loc_tokyo", name: "东京", city: "東京都", region: "関東", country: "日本", latitude: 35.6762, longitude: 139.6503, precision: "city" },
+  { id: "loc_qingdao", name: "青岛", city: "青岛市", region: "山东省", country: "中国", latitude: 36.0671, longitude: 120.3826, precision: "city" },
+  { id: "loc_nanchang", name: "南昌", city: "南昌市", region: "江西省", country: "中国", latitude: 28.682, longitude: 115.8579, precision: "city" },
+];
+
+export const persons: ShiguangPerson[] = [
+  { id: "per_me", name: "我", relationLabel: "本人", avatar: "/images/hong.jpg", aliases: ["小拾", "shiguang"] },
+  { id: "per_lin", name: "小林", relationLabel: "大学同学", avatar: IMG[4], aliases: ["林一", "小林同学"] },
+  { id: "per_jie", name: "阿杰", relationLabel: "室友", avatar: IMG[7], aliases: ["阿杰杰"] },
+  { id: "per_father", name: "父亲", relationLabel: "家人", avatar: IMG[11], aliases: ["爸", "老爸"] },
+  { id: "per_mother", name: "母亲", relationLabel: "家人", avatar: IMG[13], aliases: ["妈", "老妈"] },
+  { id: "per_qing", name: "苏晴", relationLabel: "朋友", avatar: IMG[16], aliases: ["晴姐"] },
+  { id: "per_chen", name: "陈老师", relationLabel: "导师", avatar: IMG[18], aliases: ["陈教授"] },
+];
+
+export const memories: ShiguangMemory[] = [
+  {
+    id: "mem_20180716_01",
+    title: "海边的毕业夜",
+    summary: "毕业旅行最后一天，三个人在环岛路的海边看了一场烟花，海风把沙子吹进了鞋里。",
+    content:
+      "傍晚从曾厝垵一路骑到环岛路，天已经暗透了。阿杰脱了鞋跑进浪里，小林蹲在沙滩上写字，写到一半就被潮水抹掉。烟花是十点整开始的，三分钟就结束了，但我们坐在礁石上聊到了快十二点。那天晚上我说，以后一定要把这段写下来。",
+    happenedAt: "2018-07-16T22:10:00",
+    timePrecision: "exact",
+    locationId: "loc_xiamen",
+    personIds: ["per_me", "per_lin", "per_jie"],
+    tags: ["毕业旅行", "海边", "烟花", "夜晚"],
+    emotion: "不舍",
+    importance: 5,
+    sourceType: "photo",
+    cover: IMG[0],
+    aiStatus: "confirmed",
+    confidence: 0.93,
+    aiGenerated: true,
+    mediaCount: 12,
+  },
+  {
+    id: "mem_20180714_01",
+    title: "第一次坐轮渡去鼓浪屿",
+    summary: "早上六点半排队买票，甲板上第一次看到厦门的海雾，小林晕船靠在我肩上睡着了。",
+    content: "轮渡开出去十分钟海雾就涌上来了，整个岛像浮在水面上。",
+    happenedAt: "2018-07-14T07:20:00",
+    timePrecision: "exact",
+    locationId: "loc_xiamen",
+    personIds: ["per_me", "per_lin", "per_jie"],
+    tags: ["旅行", "海边", "鼓浪屿"],
+    emotion: "兴奋",
+    importance: 3,
+    sourceType: "photo",
+    cover: IMG[1],
+    aiStatus: "confirmed",
+    confidence: 0.88,
+    aiGenerated: true,
+    mediaCount: 9,
+  },
+  {
+    id: "mem_20180903_01",
+    title: "入职第一天的手写笔记",
+    summary: "第一份工作的第一天，笔记本上记了七页，末尾写着“不要害怕问问题”。",
+    content:
+      "工位在窗边，显示器还没有到，用笔记本连着外接屏。带我的师兄说，看代码不要只看能跑，要看为什么这么写。晚上九点下班，走出园区的时候天已经完全黑了。",
+    happenedAt: "2018-09-03T21:40:00",
+    timePrecision: "day",
+    locationId: "loc_hangzhou",
+    personIds: ["per_me"],
+    tags: ["工作", "开始", "笔记"],
+    emotion: "忐忑",
+    importance: 4,
+    sourceType: "document",
+    cover: IMG[2],
+    aiStatus: "confirmed",
+    confidence: 0.81,
+    aiGenerated: false,
+    mediaCount: 4,
+  },
+  {
+    id: "mem_20190205_01",
+    title: "除夕夜的厨房",
+    summary: "母亲在厨房炸丸子，父亲在客厅写春联，我在中间来回跑，被油星烫了一下手背。",
+    content: "那年的年夜饭有十二道菜，我负责切葱姜，切到手指发酸。",
+    happenedAt: "2019-02-05T18:30:00",
+    timePrecision: "exact",
+    locationId: "loc_nanchang",
+    personIds: ["per_me", "per_father", "per_mother"],
+    tags: ["家人", "春节", "厨房"],
+    emotion: "温暖",
+    importance: 4,
+    sourceType: "photo",
+    cover: IMG[3],
+    aiStatus: "confirmed",
+    confidence: 0.9,
+    aiGenerated: true,
+    mediaCount: 18,
+  },
+  {
+    id: "mem_20190501_01",
+    title: "成都的第一个雨夜",
+    summary: "五一临时决定去成都，住在宽窄巷子旁边的老楼里，雨下了一整夜。",
+    content: "楼下的火锅店排到三十多号，我们就在便利店买了关东煮，坐在窗台上听雨。",
+    happenedAt: "2019-05-01T23:00:00",
+    timePrecision: "day",
+    locationId: "loc_chengdu",
+    personIds: ["per_me", "per_qing"],
+    tags: ["旅行", "雨", "火锅"],
+    emotion: "放松",
+    importance: 3,
+    sourceType: "photo",
+    cover: IMG[4],
+    aiStatus: "confirmed",
+    confidence: 0.86,
+    aiGenerated: true,
+    mediaCount: 11,
+  },
+  {
+    id: "mem_20191001_01",
+    title: "西安城墙上的十公里",
+    summary: "国庆在城墙上租了自行车，骑了整整一圈，用时一小时四十分。",
+    content: "风很大，帽子被吹掉一次。城砖被磨得发亮，晚霞从垛口里透过来。",
+    happenedAt: "2019-10-01T17:30:00",
+    timePrecision: "day",
+    locationId: "loc_xian",
+    personIds: ["per_me", "per_jie"],
+    tags: ["旅行", "骑行", "古城"],
+    emotion: "畅快",
+    importance: 3,
+    sourceType: "photo",
+    cover: IMG[5],
+    aiStatus: "confirmed",
+    confidence: 0.84,
+    aiGenerated: true,
+    mediaCount: 14,
+  },
+  {
+    id: "mem_20200320_01",
+    title: "在家办公的第 40 天",
+    summary: "阳台被改成了工位，每天下午三点能听到楼下小孩跳绳的声音。",
+    content: "那段时间开始记日记，一天一段，写了满满两本。",
+    happenedAt: "2020-03-20T15:00:00",
+    timePrecision: "day",
+    locationId: "loc_nanchang",
+    personIds: ["per_me", "per_mother"],
+    tags: ["日常", "居家", "日记"],
+    emotion: "平静",
+    importance: 2,
+    sourceType: "text",
+    cover: IMG[6],
+    aiStatus: "confirmed",
+    confidence: 0.77,
+    aiGenerated: false,
+    mediaCount: 2,
+  },
+  {
+    id: "mem_20200815_01",
+    title: "青岛的第一次下海",
+    summary: "八月的水比想象中冷，阿杰把我按进浪里，呛了一口咸水。",
+    content: "傍晚退潮，沙滩上留下很多小螃蟹的洞。",
+    happenedAt: "2020-08-15T16:40:00",
+    timePrecision: "exact",
+    locationId: "loc_qingdao",
+    personIds: ["per_me", "per_jie"],
+    tags: ["海边", "夏天", "旅行"],
+    emotion: "开心",
+    importance: 3,
+    sourceType: "photo",
+    cover: IMG[7],
+    aiStatus: "confirmed",
+    confidence: 0.85,
+    aiGenerated: true,
+    mediaCount: 16,
+  },
+  {
+    id: "mem_20210402_01",
+    title: "父亲教我用老相机",
+    summary: "清明节回家，父亲从柜子最上层翻出一台胶片机，教我怎么调光圈。",
+    content:
+      "他说这台相机拍过我三岁的样子。快门很涩，需要很大力才能按下去。那天我们在院子里拍完了一整卷，等洗出来的时候已经是两个月后了。",
+    happenedAt: "2021-04-02T10:20:00",
+    timePrecision: "day",
+    locationId: "loc_nanchang",
+    personIds: ["per_me", "per_father"],
+    tags: ["家人", "相机", "胶片"],
+    emotion: "安静",
+    importance: 5,
+    sourceType: "photo",
+    cover: IMG[8],
+    aiStatus: "confirmed",
+    confidence: 0.91,
+    aiGenerated: true,
+    mediaCount: 24,
+  },
+  {
+    id: "mem_20210720_01",
+    title: "杭州的第一个夏天",
+    summary: "搬到杭州的第七天，骑着共享单车绕了西湖一圈，中途在苏堤上躲了一场阵雨。",
+    content: "那天晚上决定留下来。",
+    happenedAt: "2021-07-20T19:10:00",
+    timePrecision: "day",
+    locationId: "loc_hangzhou",
+    personIds: ["per_me"],
+    tags: ["搬家", "西湖", "夏天"],
+    emotion: "笃定",
+    importance: 4,
+    sourceType: "photo",
+    cover: IMG[9],
+    aiStatus: "confirmed",
+    confidence: 0.83,
+    aiGenerated: true,
+    mediaCount: 8,
+  },
+  {
+    id: "mem_20211111_01",
+    title: "和小林在杭州重逢",
+    summary: "三年没见，约在河坊街，他从厦门带了一盒馅饼，已经碎了一半。",
+    content: "我们聊到店打烊，站在路边又聊了四十分钟。",
+    happenedAt: "2021-11-11T20:30:00",
+    timePrecision: "day",
+    locationId: "loc_hangzhou",
+    personIds: ["per_me", "per_lin"],
+    tags: ["重逢", "朋友", "夜"],
+    emotion: "感慨",
+    importance: 4,
+    sourceType: "photo",
+    cover: IMG[10],
+    aiStatus: "confirmed",
+    confidence: 0.87,
+    aiGenerated: true,
+    mediaCount: 6,
+  },
+  {
+    id: "mem_20220312_01",
+    title: "项目上线的那一夜",
+    summary: "凌晨两点半发布，四点回滚，五点重新发布，早上七点看着第一笔真实数据进来。",
+    content: "那天办公室的灯一直没关，泡面的味道留了三天。",
+    happenedAt: "2022-03-12T07:00:00",
+    timePrecision: "exact",
+    locationId: "loc_hangzhou",
+    personIds: ["per_me", "per_chen"],
+    tags: ["工作", "项目", "深夜"],
+    emotion: "疲惫而骄傲",
+    importance: 4,
+    sourceType: "photo",
+    cover: IMG[11],
+    aiStatus: "confirmed",
+    confidence: 0.79,
+    aiGenerated: true,
+    mediaCount: 5,
+  },
+  {
+    id: "mem_20220910_01",
+    title: "中秋的阳台",
+    summary: "一个人在杭州过中秋，把桌子搬到阳台上，对着月亮吃了一块五仁月饼。",
+    content: "给家里打了四十分钟电话，母亲说她今年也买了五仁的。",
+    happenedAt: "2022-09-10T21:00:00",
+    timePrecision: "exact",
+    locationId: "loc_hangzhou",
+    personIds: ["per_me", "per_mother"],
+    tags: ["中秋", "独处", "家人"],
+    emotion: "想念",
+    importance: 3,
+    sourceType: "photo",
+    cover: IMG[12],
+    aiStatus: "confirmed",
+    confidence: 0.82,
+    aiGenerated: true,
+    mediaCount: 3,
+  },
+  {
+    id: "mem_20230318_01",
+    title: "第一次去东京",
+    summary: "落地成田的下午在下雨，拖着箱子换了两趟电车，到住处时天已经黑了。",
+    content: "便利店的关东煮比想象中好吃，站在窗边看着楼下的自动贩卖机亮着灯。",
+    happenedAt: "2023-03-18T19:40:00",
+    timePrecision: "exact",
+    locationId: "loc_tokyo",
+    personIds: ["per_me"],
+    tags: ["旅行", "东京", "雨"],
+    emotion: "新鲜",
+    importance: 4,
+    sourceType: "photo",
+    cover: IMG[13],
+    aiStatus: "confirmed",
+    confidence: 0.89,
+    aiGenerated: true,
+    mediaCount: 21,
+  },
+  {
+    id: "mem_20230325_01",
+    title: "上野公园的樱花",
+    summary: "樱花比预报早开了四天，树下坐满了人，我们在便利店买了饭团坐了一个下午。",
+    content: "风一吹花瓣就落到饭团上，苏晴说这叫樱饼。",
+    happenedAt: "2023-03-25T14:20:00",
+    timePrecision: "exact",
+    locationId: "loc_tokyo",
+    personIds: ["per_me", "per_qing"],
+    tags: ["樱花", "春天", "东京"],
+    emotion: "轻松",
+    importance: 4,
+    sourceType: "photo",
+    cover: IMG[14],
+    aiStatus: "confirmed",
+    confidence: 0.9,
+    aiGenerated: true,
+    mediaCount: 27,
+  },
+  {
+    id: "mem_20230402_01",
+    title: "东京的最后一晚",
+    summary: "在住处附近的天桥上站了很久，看电车轮流转弯，决定把这段写成文章。",
+    content: "机票是第二天中午的，行李早就收好了，剩下的时间只够散一次步。",
+    happenedAt: "2023-04-02T22:30:00",
+    timePrecision: "exact",
+    locationId: "loc_tokyo",
+    personIds: ["per_me"],
+    tags: ["东京", "夜", "告别"],
+    emotion: "平静",
+    importance: 5,
+    sourceType: "photo",
+    cover: IMG[15],
+    aiStatus: "confirmed",
+    confidence: 0.92,
+    aiGenerated: true,
+    mediaCount: 13,
+  },
+  {
+    id: "mem_20230909_01",
+    title: "父亲生日的那通电话",
+    summary: "在外地，只能在电话里祝他生日快乐，他说家里今年种了新的桂花。",
+    content: "挂电话前他问，相机还会用吗。",
+    happenedAt: "2023-09-09T20:10:00",
+    timePrecision: "day",
+    locationId: "loc_hangzhou",
+    personIds: ["per_me", "per_father"],
+    tags: ["家人", "生日", "电话"],
+    emotion: "柔软",
+    importance: 4,
+    sourceType: "text",
+    cover: IMG[16],
+    aiStatus: "confirmed",
+    confidence: 0.75,
+    aiGenerated: false,
+    mediaCount: 1,
+  },
+  {
+    id: "mem_20240101_01",
+    title: "元旦的跨年面",
+    summary: "在重庆跨年，凌晨一点在老城区的小面馆里吃了碗小面，辣得眼泪都出来了。",
+    content: "老板说这叫“新年第一口辣”，一年都会顺。",
+    happenedAt: "2024-01-01T01:10:00",
+    timePrecision: "exact",
+    locationId: "loc_chongqing",
+    personIds: ["per_me", "per_jie"],
+    tags: ["跨年", "重庆", "小面"],
+    emotion: "热闹",
+    importance: 3,
+    sourceType: "photo",
+    cover: IMG[17],
+    aiStatus: "confirmed",
+    confidence: 0.86,
+    aiGenerated: true,
+    mediaCount: 10,
+  },
+  {
+    id: "mem_20240618_01",
+    title: "暴雨天的加班",
+    summary: "暴雨把整个城市按下暂停键，办公室只剩三个人，外卖骑手发消息说路上积水太深。",
+    content: "我们分了一盒速食粥，看着窗外的雨从白帘变成细线。",
+    happenedAt: "2024-06-18T20:40:00",
+    timePrecision: "day",
+    locationId: "loc_hangzhou",
+    personIds: ["per_me", "per_chen"],
+    tags: ["雨", "加班", "工作"],
+    emotion: "疲惫",
+    importance: 2,
+    sourceType: "photo",
+    cover: IMG[18],
+    aiStatus: "pending",
+    confidence: 0.68,
+    aiGenerated: true,
+    mediaCount: 4,
+  },
+  {
+    id: "mem_20241003_01",
+    title: "和小林的第二次厦门",
+    summary: "六年后又回到环岛路，礁石还在，烟花的地方立起了一块新的路牌。",
+    content: "小林说，我们那年在沙滩上写的字，早就不知道冲到哪里去了。",
+    happenedAt: "2024-10-03T21:30:00",
+    timePrecision: "exact",
+    locationId: "loc_xiamen",
+    personIds: ["per_me", "per_lin"],
+    tags: ["厦门", "重逢", "海边"],
+    emotion: "感慨",
+    importance: 5,
+    sourceType: "photo",
+    cover: IMG[19],
+    aiStatus: "confirmed",
+    confidence: 0.91,
+    aiGenerated: true,
+    mediaCount: 15,
+  },
+];
+
+export const stories: ShiguangStory[] = [
+  {
+    id: "story_xiamen",
+    title: "我与厦门",
+    subtitle: "两段相隔六年的海风",
+    cover: IMG[0],
+    memoryIds: ["mem_20180714_01", "mem_20180716_01", "mem_20241003_01"],
+    poem: "海把两次告别洗成了同一块礁石，只是我们都不再是当年那个年纪。",
+    visibility: "link",
+    createdAt: "2024-10-08",
+  },
+  {
+    id: "story_father",
+    title: "我和父亲",
+    subtitle: "一台胶片相机，和两代人的取景框",
+    cover: IMG[8],
+    memoryIds: ["mem_20190205_01", "mem_20210402_01", "mem_20230909_01"],
+    poem: "他不说想念，只问你那台相机还会不会用。",
+    visibility: "private",
+    createdAt: "2023-09-20",
+  },
+  {
+    id: "story_tokyo",
+    title: "2023 东京生活",
+    subtitle: "春天的雨、樱花和最后一班电车",
+    cover: IMG[14],
+    memoryIds: ["mem_20230318_01", "mem_20230325_01", "mem_20230402_01"],
+    poem: "把陌生的城市走成熟悉，只需要三周和一场樱花。",
+    visibility: "link",
+    createdAt: "2023-04-10",
+  },
+  {
+    id: "story_growth",
+    title: "我的毕业四年",
+    subtitle: "从第一份笔记到凌晨两点的发布",
+    cover: IMG[11],
+    memoryIds: ["mem_20180903_01", "mem_20220312_01", "mem_20240618_01"],
+    poem: "成长没有配乐，只有键盘声和泡面的味道。",
+    visibility: "private",
+    createdAt: "2024-07-01",
+  },
+];
+
+// ── 演示账号信息 ─────────────────────────────────────
+export const profile = {
+  displayName: "小拾",
+  avatar: "/images/hong.jpg",
+  slogan: "你的记忆，值得被重新看见。",
+  timezone: "Asia/Shanghai",
+  memberSince: 2018,
+  isDemo: true,
+};
+
+export const allImages = IMG;

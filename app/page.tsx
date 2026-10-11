@@ -1,12 +1,43 @@
+import Link from "next/link";
 import { siteConfig } from "@/siteConfig";
 
 const ENTRIES = [
-  { title: "时间长河", desc: "把一段段记忆排成一条河", icon: "🕰️" },
-  { title: "记忆地图", desc: "去过的地方，都留在这里", icon: "🗺️" },
-  { title: "人物网络", desc: "从记忆里长出的一张关系网", icon: "👥" },
-  { title: "故事馆", desc: "被讲述、被听见的人生片段", icon: "📖" },
-  { title: "上传与解析", desc: "照片、视频、文本，自动读出时间与地点", icon: "📤" },
-  { title: "小拾 AI", desc: "基于你自己的记忆库回答问题", icon: "💬" },
+  {
+    href: "/timeline",
+    title: "时间长河",
+    desc: "把一段段记忆排成一条河，按年份浏览",
+    icon: "🕰️",
+  },
+  {
+    href: "",
+    title: "记忆地图",
+    desc: "去过的地方，都留在这里",
+    icon: "🗺️",
+  },
+  {
+    href: "",
+    title: "人物网络",
+    desc: "从记忆里长出的一张关系网",
+    icon: "👥",
+  },
+  {
+    href: "",
+    title: "上传与解析",
+    desc: "照片、视频、文本，自动读出时间与地点",
+    icon: "📤",
+  },
+  {
+    href: "",
+    title: "小拾 AI",
+    desc: "基于你自己的记忆库回答问题",
+    icon: "💬",
+  },
+  {
+    href: "",
+    title: "故事馆",
+    desc: "被讲述、被听见的人生片段",
+    icon: "📖",
+  },
 ];
 
 export default function Home() {
@@ -22,24 +53,43 @@ export default function Home() {
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 w-full max-w-4xl">
-        {ENTRIES.map((e) => (
-          <div
-            key={e.title}
-            className="rounded-2xl border border-white/40 dark:border-white/10 bg-white/40 dark:bg-slate-800/50 backdrop-blur-md shadow-lg p-5 transition-all duration-500 hover:scale-[1.03] hover:shadow-xl"
-          >
-            <div className="text-2xl mb-2">{e.icon}</div>
-            <div className="font-bold text-slate-900 dark:text-white">
-              {e.title}
+        {ENTRIES.map((e) => {
+          const card = (
+            <>
+              <div className="text-2xl mb-2">{e.icon}</div>
+              <div className="font-bold text-slate-900 dark:text-white">
+                {e.title}
+              </div>
+              <div className="mt-1 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
+                {e.desc}
+              </div>
+            </>
+          );
+
+          const base =
+            "rounded-2xl border border-white/40 dark:border-white/10 bg-white/40 dark:bg-slate-800/50 backdrop-blur-md shadow-lg p-5 transition-all duration-500";
+
+          return e.href ? (
+            <Link
+              key={e.title}
+              href={e.href}
+              className={`${base} hover:scale-[1.03] hover:shadow-xl`}
+            >
+              {card}
+            </Link>
+          ) : (
+            <div key={e.title} className={`${base} opacity-55`}>
+              {card}
+              <div className="mt-3 text-[10px] tracking-wider text-slate-400 dark:text-slate-500">
+                待接入
+              </div>
             </div>
-            <div className="mt-1 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
-              {e.desc}
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       <p className="text-xs text-slate-400 dark:text-slate-500 tracking-wider">
-        v2 · 骨架已可运行，各功能模块逐步接入
+        v3 · 已接入记忆数据层与时间长河
       </p>
     </main>
   );
