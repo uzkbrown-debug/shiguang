@@ -9,9 +9,9 @@ const ENTRIES = [
     icon: "🕰️",
   },
   {
-    href: "",
+    href: "/map",
     title: "记忆地图",
-    desc: "去过的地方，都留在这里",
+    desc: "去过的地方都会发光，点开看看当时的自己",
     icon: "🗺️",
   },
   {
@@ -89,7 +89,7 @@ export default function Home() {
       </div>
 
       <p className="text-xs text-slate-400 dark:text-slate-500 tracking-wider">
-        v3 · 已接入记忆数据层与时间长河
+        v4 · 已接入记忆数据层、时间长河与记忆地图
       </p>
     </main>
   );
