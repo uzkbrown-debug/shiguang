@@ -15,9 +15,9 @@ const ENTRIES = [
     icon: "🗺️",
   },
   {
-    href: "",
+    href: "/people",
     title: "人物网络",
-    desc: "从记忆里长出的一张关系网",
+    desc: "谁在你的记忆里出现得最多，一张关系网说得清",
     icon: "👥",
   },
   {
@@ -89,7 +89,7 @@ export default function Home() {
       </div>
 
       <p className="text-xs text-slate-400 dark:text-slate-500 tracking-wider">
-        v4 · 已接入记忆数据层、时间长河与记忆地图
+        v5 · 已接入记忆数据层、时间长河、记忆地图与人物网络
       </p>
     </main>
   );
