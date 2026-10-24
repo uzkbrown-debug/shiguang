@@ -3,6 +3,12 @@ import { siteConfig } from "@/siteConfig";
 
 const ENTRIES = [
   {
+    href: "/upload",
+    title: "上传与解析",
+    desc: "照片、视频、文本丢进去，自动读出时间、地点与故事",
+    icon: "📤",
+  },
+  {
     href: "/timeline",
     title: "时间长河",
     desc: "把一段段记忆排成一条河，按年份浏览",
@@ -21,22 +27,16 @@ const ENTRIES = [
     icon: "👥",
   },
   {
-    href: "",
-    title: "上传与解析",
-    desc: "照片、视频、文本，自动读出时间与地点",
-    icon: "📤",
+    href: "/pending",
+    title: "待分析",
+    desc: "先入库、之后统一处理，不打断当下的记录",
+    icon: "📥",
   },
   {
     href: "",
     title: "小拾 AI",
     desc: "基于你自己的记忆库回答问题",
     icon: "💬",
-  },
-  {
-    href: "",
-    title: "故事馆",
-    desc: "被讲述、被听见的人生片段",
-    icon: "📖",
   },
 ];
 
@@ -49,6 +49,9 @@ export default function Home() {
         </h1>
         <p className="mt-4 max-w-xl mx-auto text-sm md:text-base leading-relaxed text-slate-600 dark:text-slate-300">
           {siteConfig.bio}
+        </p>
+        <p className="mt-2 text-[11px] tracking-widest text-indigo-500/80 dark:text-indigo-300/80">
+          后端已接入 · AI 分析链路可用
         </p>
       </div>
 
@@ -89,7 +92,7 @@ export default function Home() {
       </div>
 
       <p className="text-xs text-slate-400 dark:text-slate-500 tracking-wider">
-        v5 · 已接入记忆数据层、时间长河、记忆地图与人物网络
+        v6 · 后端落地：FastAPI + MySQL，接入上传与 AI 分析链路
       </p>
     </main>
   );
