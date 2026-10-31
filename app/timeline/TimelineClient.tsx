@@ -377,6 +377,15 @@ export default function TimelineClient() {
               AI 回忆模式 · 播放 {centerYear}
             </button>
           )}
+          {/* 多张照片一次传进长河：传完自动回到这里 */}
+          <button
+            onClick={() => router.push("/upload?from=timeline")}
+            className={`${centerYear ? "" : "ml-auto"} flex items-center gap-1.5 px-4 py-2 rounded-xl bg-sky-500 text-white text-xs font-medium hover:bg-sky-600 transition-colors`}
+            title="可以一次选多张照片，会归成河里的同一段记忆"
+          >
+            <ImageIcon className="w-3.5 h-3.5" />
+            上传记忆
+          </button>
         </div>
         <p className="text-sm md:text-base text-slate-500 dark:text-slate-400 ml-7 md:ml-10">
           归档 · 时光河流 · 共 {filtered.length} 段记忆

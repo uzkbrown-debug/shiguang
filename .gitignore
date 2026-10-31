@@ -73,13 +73,19 @@ _redact.ps1
 _redact_backup/
 
 # ---------- 大体积素材：不进仓库（本地保留） ----------
-/public/images/
 /public/music/
 /public/videos/
 /public/live2d/
 
-# ---------- 本机运维脚本：不进仓库 ----------
-_tools/make_history.py
-_tools/rebuild_history.py
-_tools/scrub_identity.py
+# ---------- 开发期临时目录：不进仓库 ----------
+/_shots/
+/_mock/
+/_tools/
+/_shot_doc/
+/_preview*/
+/_saved.txt
+/_verify_refs.txt
 tools/push-v1.bat
+
+# ---------- 提交用的文档产物（二进制） ----------
+/*.docx

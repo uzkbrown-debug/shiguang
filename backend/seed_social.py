@@ -22,7 +22,12 @@ from models import (
     User,
 )
 
-OWNER = {"username": "2206481523", "password": "123456wwk", "nickname": "我", "home_city": "上海"}
+OWNER = {
+    "username": os.getenv("DEMO_OWNER_USER", "demo"),
+    "password": os.getenv("DEMO_OWNER_PASS", "demo123456"),
+    "nickname": "我",
+    "home_city": "上海",
+}
 
 # 演示好友：账号 / 密码 / 昵称 / 一句话 / 常驻地
 DEMO_USERS = [

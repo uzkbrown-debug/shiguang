@@ -5,6 +5,7 @@
 
 图片来自 Wikimedia Commons（自由授权），下载失败时自动生成一张带地名的占位图。
 """
+import os
 import io
 import json
 import sys
@@ -333,6 +334,11 @@ REQUESTERS = ("wander_lin", "tina_food")
 _IMAGE_CACHE: dict[str, list[str]] = {}
 
 
+# 主账号：从环境变量读取，仓库里只保留演示默认值
+OWNER_USERNAME = os.getenv("DEMO_OWNER_USER", "demo")
+OWNER_PASSWORD = os.getenv("DEMO_OWNER_PASS", "demo123456")
+
+
 def _hash_name(data: bytes, ext: str = ".jpg") -> str:
     return f"demo_{sha1(data).hexdigest()[:16]}{ext}"
 
@@ -570,7 +576,7 @@ def main() -> None:
     init_db()
     db = SessionLocal()
     try:
-        owner = db.query(User).filter(User.username == "2206481523").first()
+        owner = db.query(User).filter(User.username == OWNER_USERNAME).first()
         if not owner:
             print("先跑 seed_social.py 建主账号")
             return

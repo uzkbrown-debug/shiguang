@@ -5,6 +5,7 @@ import { siteConfig } from "@/siteConfig";
 const PUBLIC_PREFIXES = [
   "/login",
   "/api",
+  "/readyz",
   "/_next",
   "/images",
   "/videos",
@@ -21,15 +22,10 @@ export function middleware(request: NextRequest) {
   if (!auth?.enabled) return NextResponse.next();
 
   const cookie = request.cookies.get(auth.cookieName)?.value;
-  const authed = cookie === auth.token;
-
-  // 已登录还去登录页 → 直接回首页
-  if (authed && pathname === "/login") {
-    const home = request.nextUrl.clone();
-    home.pathname = "/";
-    home.search = "";
-    return NextResponse.redirect(home);
-  }
+  // 现在每个账号一个会话令牌，这里只判断「有没有登录过」；
+  // 令牌是否还有效由页面里的 SessionGuard 调 /api/auth/me 确认，
+  // 所以这里不能把 /login 直接弹回首页 —— 否则过期 cookie 会两头弹成死循环。
+  const authed = Boolean(cookie && cookie.length > 10);
 
   if (PUBLIC_PREFIXES.some((p) => pathname.startsWith(p))) {
     return NextResponse.next();
