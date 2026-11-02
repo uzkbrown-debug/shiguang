@@ -12,6 +12,8 @@ export interface Collection {
   /** 这一条里有多少张照片 */
   count: number;
   place?: string;
+  /** 相纸下面那行小字：好友/公开的相册用来标是谁的 */
+  owner?: string;
 }
 
 export default function PolaroidGallery({
@@ -33,6 +35,7 @@ export default function PolaroidGallery({
             index={i}
             layers={item.count > 3 ? 3 : item.count}
             tone={tone}
+            footnote={item.owner}
           />
         </Link>
       ))}

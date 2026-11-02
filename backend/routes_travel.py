@@ -349,7 +349,9 @@ def explore(
         guide_filter = TravelGuide.visibility == "public"
 
     guides = db.scalars(
-        select(TravelGuide).options(selectinload(TravelGuide.days_plan)).where(guide_filter)
+        select(TravelGuide)
+        .options(selectinload(TravelGuide.days_plan), selectinload(TravelGuide.media))
+        .where(guide_filter)
     ).all()
     day_text = {
         g.id: [(d, f"{d.title or ''}{d.content or ''}") for d in g.days_plan] for g in guides
@@ -357,6 +359,54 @@ def explore(
     guide_refs: dict[str, list[dict]] = {}
     matched_by_name: set[str] = set()
     visible_guides = [g for g in guides if can_view(db, viewer, g.user_id, g.visibility)]
+
+    # 照片 → 攻略：按图片本身对，比按地名对更准。
+    # 同一张图可能被好几篇攻略复用（演示数据尤其明显），所以一篇攻略一个权重：
+    # 封面 3 > 当天配图 2 > 图集 1，再优先「作者就是这张照片的主人」的那篇。
+    photo_guide: dict[str, list[dict]] = {}
+    for g in visible_guides:
+        ref_owner = (omap[g.user_id].nickname if g.user_id in omap else None)
+        entries = [(g.cover, 3)] + [(d.image_url, 2) for d in g.days_plan] + [(m.url, 1) for m in g.media]
+        for url, weight in entries:
+            if not url:
+                continue
+            bucket = photo_guide.setdefault(url, [])
+            for item in bucket:
+                if item["guide_id"] == g.id:
+                    item["weight"] = max(item["weight"], weight)
+                    break
+            else:
+                bucket.append(
+                    {
+                        "guide_id": g.id,
+                        "title": g.title,
+                        "owner_name": ref_owner,
+                        "owner_id": g.user_id,
+                        "weight": weight,
+                    }
+                )
+
+    def best_guide_for(url: str | None, owner_id: str, prefer_ids: set[str]) -> dict | None:
+        """这张照片最该跳哪篇攻略。
+
+        顺序：这篇攻略正文就提到过这个地点 > 作者就是照片主人 > 封面/当天图/图集 > id 稳定排序。
+        同一张图被多篇复用（演示数据常见）时，靠地名那一路把范围收窄。
+        """
+        if not url:
+            return None
+        cand = photo_guide.get(url)
+        if not cand:
+            return None
+        ranked = sorted(
+            cand,
+            key=lambda c: (
+                c["guide_id"] not in prefer_ids,
+                c["owner_id"] != owner_id,
+                -c["weight"],
+                c["guide_id"],
+            ),
+        )
+        return ranked[0]
     # 两轮：先只用地点名去正文里找，一轮下来仍没对上的地点，才退到城市名兜底。
     # 这样「慕田峪长城」不会因为广州那篇里的「北京路」错认成北京，
     # 「夫子庙秦淮河」也不会因为「南京东路」错认成上海。
@@ -402,12 +452,26 @@ def explore(
             my_visits[v.memory_id] = v.state
 
     for p in points:
-        p["photos"] = photos.get(p["memory_id"], [])
+        plist = photos.get(p["memory_id"], [])
+        here_refs = guide_refs.get(p["location_id"], [])
+        for ph in plist:
+            # ① 这个地点被哪篇攻略写到过：优先它（照片通常就是那篇的图）
+            if here_refs:
+                ph["guide_id"] = here_refs[0]["guide_id"]
+                ph["guide_title"] = here_refs[0]["title"]
+                ph["guide_from"] = "place"
+                continue
+            # ② 地点没对上攻略：按图片本身找包含这张照片的那篇
+            ref = best_guide_for(ph["url"], p["owner_id"], set())
+            if ref:
+                ph["guide_id"] = ref["guide_id"]
+                ph["guide_title"] = ref["title"]
+                ph["guide_from"] = "photo"
+        p["photos"] = plist
         p["route_refs"] = route_refs.get(p["location_id"], [])
         p["guide_refs"] = guide_refs.get(p["location_id"], [])
         p["visit"] = my_visits.get(p["memory_id"])
         p["person_names"] = [persons.get(pid, "") for pid in p["person_ids"] if persons.get(pid)]
-
     # 顶部头像条：参与过这些记忆的人物（去重，带出现次数）
     person_counter: dict[str, int] = {}
     for p in points:

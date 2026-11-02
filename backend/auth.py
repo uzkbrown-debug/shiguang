@@ -140,7 +140,7 @@ def visible_owner_ids(db: Session, viewer: User | None, scope: str | None = "all
         return mine
     # 「好友」只看好友，不含自己：自己那份在「只看我」里
     if scope in (None, "", "all", "friends"):
-        return friends
+        return [f for f in friends if f != viewer.id]
     if scope.startswith("u:"):
         target = scope[2:]
         if target == viewer.id or target in friends:

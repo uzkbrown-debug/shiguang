@@ -3,12 +3,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { motion, AnimatePresence, useMotionValue } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import { User, LogOut, Clock, MapPin, BookOpen, X, LogIn, Compass, Sparkles, Camera } from "lucide-react";
 import { fetchMe, logout as doLogout, uploadAvatar, type MeUser } from "@/lib/session";
 
-const POS_KEY = "avatar_pos";
-
+/**
+ * 头像固定在顶部导航栏最右侧（不再可拖动）。
+ * 点开是账号菜单，向下展开、右对齐。
+ */
 export default function UserAvatar() {
   const pathname = usePathname();
   const [me, setMe] = useState<MeUser | null>(null);
@@ -18,9 +20,6 @@ export default function UserAvatar() {
   const [hint, setHint] = useState("");
   const boxRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const dragging = useRef(false);
-  const x = useMotionValue(0);
-  const y = useMotionValue(0);
 
   // 真实会话：和后端 /api/auth/me 保持一致
   const reload = useCallback(() => {
@@ -38,37 +37,6 @@ export default function UserAvatar() {
     if (pathname.startsWith("/login")) return;
     reload();
   }, [pathname, reload]);
-
-  // 恢复上次拖到的位置
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem(POS_KEY);
-      if (saved) {
-        const p = JSON.parse(saved) as { x: number; y: number };
-        if (typeof p.x === "number" && typeof p.y === "number") {
-          x.set(p.x);
-          y.set(p.y);
-        }
-      }
-    } catch {
-      /* ignore */
-    }
-  }, [x, y]);
-
-  const clampToViewport = () => {
-    const el = boxRef.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    const pad = 8;
-    let nx = x.get();
-    let ny = y.get();
-    if (r.left < pad) nx += pad - r.left;
-    if (r.right > window.innerWidth - pad) nx -= r.right - (window.innerWidth - pad);
-    if (r.top < 72) ny += 72 - r.top;
-    if (r.bottom > window.innerHeight - pad) ny -= r.bottom - (window.innerHeight - pad);
-    x.set(nx);
-    y.set(ny);
-  };
 
   useEffect(() => {
     const onClick = (e: MouseEvent) => {
@@ -100,36 +68,15 @@ export default function UserAvatar() {
   };
 
   return (
-    <motion.div
-      ref={boxRef}
-      drag
-      dragMomentum={false}
-      dragElastic={0.05}
-      style={{ x, y }}
-      onDragStart={() => {
-        dragging.current = true;
-      }}
-      onDragEnd={() => {
-        clampToViewport();
-        try {
-          localStorage.setItem(POS_KEY, JSON.stringify({ x: x.get(), y: y.get() }));
-        } catch {
-          /* ignore */
-        }
-        setTimeout(() => {
-          dragging.current = false;
-        }, 150);
-      }}
-      className="fixed bottom-6 left-20 z-30 cursor-grab active:cursor-grabbing touch-none select-none"
-    >
+    <div ref={boxRef} className="relative">
       <AnimatePresence>
         {open && (
           <motion.div
-            initial={{ opacity: 0, y: 12, scale: 0.96 }}
+            initial={{ opacity: 0, y: -8, scale: 0.97 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 8, scale: 0.97 }}
-            transition={{ duration: 0.18 }}
-            className="absolute bottom-full mb-3 left-0 w-[268px] rounded-2xl border border-white/50 dark:border-white/10 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl shadow-2xl overflow-hidden"
+            exit={{ opacity: 0, y: -6, scale: 0.98 }}
+            transition={{ duration: 0.16 }}
+            className="absolute right-0 top-full mt-3 w-[268px] z-[60] rounded-2xl border border-white/50 dark:border-white/10 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl shadow-2xl overflow-hidden"
           >
             {me ? (
               <>
@@ -254,7 +201,7 @@ export default function UserAvatar() {
                   去登录 / 注册
                 </Link>
                 <p className="mt-3 text-[10px] leading-relaxed text-slate-400">
-                  注册后可以上传头像、加好友，记忆默认「好友可见」。
+                  注册后可以上传头像、加好友，记忆默认「仅自己可见」。
                 </p>
               </div>
             )}
@@ -265,26 +212,23 @@ export default function UserAvatar() {
       <motion.button
         type="button"
         whileHover={{ scale: 1.06 }}
-        whileTap={{ scale: 0.95 }}
-        onClick={() => {
-          if (dragging.current) return;
-          setOpen((v) => !v);
-        }}
-        title={me ? `${displayName}（可拖动）` : "登录 / 注册（可拖动）"}
+        whileTap={{ scale: 0.94 }}
+        onClick={() => setOpen((v) => !v)}
+        title={me ? displayName : "登录 / 注册"}
         aria-label={me ? "打开账号菜单" : "登录或注册"}
-        className="w-11 h-11 rounded-full overflow-hidden border border-white/50 dark:border-white/15 bg-white/70 dark:bg-slate-800/70 backdrop-blur-md shadow-lg flex items-center justify-center"
+        className="w-9 h-9 rounded-full overflow-hidden border border-white/60 dark:border-white/20 bg-white/70 dark:bg-slate-800/70 backdrop-blur-md shadow-md flex items-center justify-center"
       >
         {me?.avatar ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img src={me.avatar} alt={displayName} className="w-full h-full object-cover" />
         ) : me ? (
-          <span className="w-full h-full flex items-center justify-center bg-gradient-to-br from-cyan-400 to-indigo-500 text-white text-sm font-semibold">
+          <span className="w-full h-full flex items-center justify-center bg-gradient-to-br from-cyan-400 to-indigo-500 text-white text-xs font-semibold">
             {displayName.slice(0, 1)}
           </span>
         ) : (
-          <User className="w-5 h-5 text-slate-500 dark:text-slate-300" />
+          <User className="w-4 h-4 text-slate-500 dark:text-slate-300" />
         )}
       </motion.button>
-    </motion.div>
+    </div>
   );
 }

@@ -113,9 +113,18 @@ export default function RouteDetailPage({ params }: { params: Promise<{ id: stri
 
       <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center gap-2 mb-4">
-          <Link href="/travel" className="p-2 rounded-lg text-slate-400 hover:text-amber-500">
+          <button
+            onClick={() => {
+              const from = new URLSearchParams(window.location.search).get("from");
+              if (from === "map") router.push("/map");
+              else if (window.history.length > 1) router.back();
+              else router.push("/travel");
+            }}
+            title="返回上一页"
+            className="p-2 rounded-lg text-slate-400 hover:text-amber-500"
+          >
             <ArrowLeft className="w-4 h-4" />
-          </Link>
+          </button>
           <h1
             className="text-xl md:text-2xl font-bold text-slate-800 dark:text-slate-100"
             style={{ fontFamily: "'Noto Serif SC', serif" }}

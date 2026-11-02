@@ -361,7 +361,7 @@ function MapInner() {
             {(
               [
                 ["me", "只看我"],
-                ["all", "好友"],
+                ["friends", "好友"],
                 ["world", "全世界"],
               ] as [string, string][]
             ).map(([value, label]) => (
@@ -375,9 +375,9 @@ function MapInner() {
                 }`}
                 title={
                   value === "world"
-                    ? "全世界：陌生人的公开足迹 + 你自己的全部足迹"
-                    : value === "all"
-                      ? "我和我的好友"
+                    ? "所有人公开的足迹（含你自己公开的）"
+                    : value === "friends"
+                      ? "只有好友的足迹，不含自己"
                       : "只有我自己"
                 }
               >
@@ -388,7 +388,7 @@ function MapInner() {
         </div>
 
         {/* 筛选面板只在「好友」档显示：只看我 / 全世界 不需要这些筛选 */}
-        {scope === "all" && (
+        {scope === "friends" && (
           <div className="glass-card rounded-2xl border-white/40 dark:border-white/10 px-3 py-2.5 mb-3">
           <div className="flex items-center gap-2 flex-wrap">
             <div className="flex items-center gap-1.5">
@@ -657,38 +657,65 @@ function MapInner() {
                     )
                   )}
 
-                  {/* 照片 */}
+                  {/* 照片：点开去它所属的那篇攻略（有路线就先去路线），没有出处才回这段记忆 */}
                   {(point.photos?.length ?? 0) > 0 && (
                     <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
-                      {point.photos!.map((ph, i) => (
-                        <a
-                          key={`${ph.url}-${i}`}
-                          href={ph.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="relative shrink-0 w-32 h-24 rounded-xl overflow-hidden border border-white/10"
-                        >
-                          {ph.kind === "video" ? (
-                            <span className="w-full h-full flex items-center justify-center bg-slate-800 text-slate-300">
-                              <Film className="w-5 h-5" />
+                      {point.photos!.map((ph, i) => {
+                        // 这张照片自己的攻略 > 这个地点对上的攻略 > 路线 > 回这段记忆
+                        const gid = ph.guide_id ?? point.guide_refs?.[0]?.guide_id;
+                        const rid = point.route_refs?.[0]?.route_id;
+                        // 带上 from=map：攻略页的返回键才知道该回地图
+                        const jump = gid
+                          ? `/travel/${gid}?from=map`
+                          : rid
+                            ? `/travel/route/${rid}?from=map`
+                            : `/memories/${point.memory_id}?photo=${encodeURIComponent(ph.url)}`;
+                        const label = ph.guide_title
+                          ? `看《${ph.guide_title}》`
+                          : gid
+                            ? "看这篇攻略"
+                            : rid
+                              ? "看这条路线"
+                              : "看大图 · 弹幕";
+                        return (
+                          <button
+                            key={`${ph.url}-${i}`}
+                            type="button"
+                            onClick={() => {
+                              if (ph.kind === "video") {
+                                window.open(ph.url, "_blank", "noreferrer");
+                                return;
+                              }
+                              router.push(jump);
+                            }}
+                            title={label}
+                            className="relative shrink-0 w-32 h-24 rounded-xl overflow-hidden border border-white/10 hover:border-emerald-400/60 transition-colors group/photo"
+                          >
+                            {ph.kind === "video" ? (
+                              <span className="w-full h-full flex items-center justify-center bg-slate-800 text-slate-300">
+                                <Film className="w-5 h-5" />
+                              </span>
+                            ) : (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img src={ph.url} alt="" className="w-full h-full object-cover" />
+                            )}
+                            <span className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-950/85 to-transparent px-1.5 py-0.5 text-[9px] text-white/80 opacity-0 group-hover/photo:opacity-100 transition-opacity">
+                              {label}
                             </span>
-                          ) : (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img src={ph.url} alt="" className="w-full h-full object-cover" />
-                          )}
-                        </a>
-                      ))}
+                          </button>
+                        );
+                      })}
                     </div>
                   )}
 
-                  {/* 出处 */}
+                  {/* 出处：和照片分开放，免得不小心点到攻略里去了 */}
                   {((point.route_refs?.length ?? 0) > 0 || (point.guide_refs?.length ?? 0) > 0) && (
-                    <div className="mt-4 space-y-2">
+                    <div className="mt-4 pt-3 border-t border-white/10 space-y-2">
                       <p className="text-[10px] text-slate-400">出处</p>
                       {point.route_refs!.map((r) => (
                         <button
                           key={`${r.route_id}-${r.stop}`}
-                          onClick={() => router.push(`/travel/route/${r.route_id}`)}
+                          onClick={() => router.push(`/travel/route/${r.route_id}?from=map`)}
                           className="w-full flex items-center gap-2 p-2.5 rounded-xl bg-amber-400/10 border border-amber-400/25 text-left hover:bg-amber-400/20 transition-colors"
                         >
                           <RouteIcon className="w-3.5 h-3.5 text-amber-400 shrink-0" />
@@ -705,7 +732,7 @@ function MapInner() {
                       {point.guide_refs!.map((g) => (
                         <button
                           key={`${g.guide_id}-${g.day}`}
-                          onClick={() => router.push(`/travel/${g.guide_id}`)}
+                          onClick={() => router.push(`/travel/${g.guide_id}?from=map`)}
                           className="w-full flex items-center gap-2 p-2.5 rounded-xl bg-emerald-400/10 border border-emerald-400/25 text-left hover:bg-emerald-400/20 transition-colors"
                         >
                           <BookOpen className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
@@ -763,7 +790,7 @@ function MapInner() {
                       {point.visit === "wish" ? "想去" : "标记想去"}
                     </button>
                     <Link
-                      href={`/memories/${point.memory_id}`}
+                      href={`/memories/${point.memory_id}?from=map`}
                       className="ml-auto text-[11px] text-sky-400 hover:underline"
                     >
                       打开这段记忆
@@ -920,6 +947,7 @@ function MapInner() {
           </p>
         )}
       </div>
+
     </div>
   );
 }

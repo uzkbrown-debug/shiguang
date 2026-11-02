@@ -108,3 +108,6 @@ _flamepreview/
 _c3.txt
 _social.json
 backend/scripts/reset_demo_passwords.py
+# 语音留言（用户自己录的，本地数据，不进仓库）
+backend/media/voice/
+backend/media/

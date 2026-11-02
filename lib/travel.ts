@@ -69,7 +69,16 @@ export interface ExplorePoint {
   latitude: number;
   longitude: number;
   person_ids: string[];
-  photos?: { url: string; caption?: string | null; kind?: string }[];
+  photos?: {
+    url: string;
+    caption?: string | null;
+    kind?: string;
+    /** 这张照片属于哪篇攻略：点照片就跳它 */
+    guide_id?: string;
+    guide_title?: string | null;
+    /** place = 按地点对上攻略；photo = 按图片本身对上 */
+    guide_from?: string | null;
+  }[];
   route_refs?: RefItem[];
   guide_refs?: RefItem[];
   visit?: string | null;

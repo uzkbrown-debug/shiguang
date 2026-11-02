@@ -330,3 +330,31 @@ class MemoryVisit(Base):
     state: Mapped[str] = mapped_column(String(16), default="visited")  # visited / wish
     note: Mapped[str | None] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class MediaComment(Base):
+    """照片留言：可以给某张照片留一句话或一段语音，前端以弹幕形式滚过
+
+    照片可能属于三种东西：记忆（memories）、旅行攻略（travel_guides）、路线（travel_routes）。
+    所以用 target_type + target_id 定位，memory_id 只是历史字段（记忆下的留言仍然填它）。
+    """
+
+    __tablename__ = "media_comments"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    # memory / guide / route
+    target_type: Mapped[str] = mapped_column(String(16), default="memory", index=True)
+    target_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    # 这条留言属于谁的内容：同一张图被不同用户上传时要各算各的，不能混在一起
+    owner_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    memory_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("memories.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    # 对应 MemoryMedia.url（同一张照片的所有留言归到一起）
+    media_url: Mapped[str] = mapped_column(String(512), index=True)
+    user_id: Mapped[str] = mapped_column(String(64), ForeignKey("users.id", ondelete="CASCADE"))
+    kind: Mapped[str] = mapped_column(String(8), default="text")  # text / voice
+    content: Mapped[str | None] = mapped_column(Text)
+    audio_url: Mapped[str | None] = mapped_column(String(512))
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)

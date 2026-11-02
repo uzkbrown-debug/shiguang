@@ -61,14 +61,19 @@ type RiverItem =
 export default function TimelineClient({
   refreshKey = 0,
   onChanged,
+  scope,
 }: {
   /** 外部数据变了（比如攻略被删）时自增，触发重新拉取 */
   refreshKey?: number;
   /** 这里删了一条记忆，通知外层刷新攻略/路线 */
   onChanged?: (removedMemoryId: string) => void;
+  /** me = 只看我；friends = 只看好友；world = 全站公开。不传就是「只看我」 */
+  scope?: "me" | "friends" | "world";
 } = {}) {
   const params = useSearchParams();
   const router = useRouter();
+  // 只看自己的时候才能拖拽删除；好友/世界的内容只能看
+  const canDelete = (scope ?? "me") === "me";
   const [detail, setDetail] = useState<ShiguangMemory | null>(null);
   const [recallYear, setRecallYear] = useState<number | null>(null);
   const [personFilter, setPersonFilter] = useState<string>("all");
@@ -86,16 +91,18 @@ export default function TimelineClient({
   // 数据来自后端（MySQL），后端不可用时自动回退本地演示数据
   const loadMemories = useCallback(() => {
     setLoading(true);
-    return fetchMemories({ limit: 500 })
+    return fetchMemories({ limit: 500, scope })
       .then(({ items, source }) => {
         setMemories(items.map(toShiguangMemory));
         setDataSource(source);
       })
       .finally(() => setLoading(false));
-  }, []);
+  }, [scope]);
 
   useEffect(() => {
-    loadMemories();
+    // 放到下一个 tick：避免在 effect 体里同步 setState（React 19 的规则）
+    const t = setTimeout(() => void loadMemories(), 0);
+    return () => clearTimeout(t);
   }, [loadMemories, refreshKey]);
 
   // 别处（地图、旅行页、上传页）改了数据，这里也跟着刷新
@@ -146,7 +153,7 @@ export default function TimelineClient({
   );
 
   const onCardPointerDown = (id: string) => (e: React.PointerEvent) => {
-    if (shatterId) return;
+    if (shatterId || !canDelete) return;
     dragStart.current = { id, y: 0, pointerY: e.clientY };
     (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
   };
@@ -300,6 +307,8 @@ export default function TimelineClient({
   useEffect(() => {
     if (didInit.current || !items.length) return;
     didInit.current = true;
+    // 放到下一个 tick 再定位，避免 effect 体里同步 setState
+    const init = setTimeout(() => {
     const y = params.get("year");
     const p = params.get("person");
     const mem = params.get("memory");
@@ -326,6 +335,8 @@ export default function TimelineClient({
         behavior: "smooth",
       });
     }, 260);
+    }, 0);
+    return () => clearTimeout(init);
   }, [items, params, controls, xForYear]);
 
   // 筛选变化后回到最新年份
@@ -748,12 +759,12 @@ export default function TimelineClient({
                             : undefined,
                         transition: dragState?.id === m.id ? "none" : "transform 0.25s ease",
                       }}
-                      title="往下拖可以粉碎删除"
+                      title={canDelete ? "往下拖可以粉碎删除" : ""}
                       className={`relative w-full h-full rounded-2xl overflow-hidden border border-white/40 dark:border-white/10 shadow-lg transition-all duration-300 group ${
                         isMobile ? "bg-white/85 dark:bg-slate-800/90" : "bg-white/60 dark:bg-slate-800/70 backdrop-blur-xl"
                       } ${shatterId === m.id ? "sg-shatter" : ""}`}
                     >
-                      {dragState && typeof document !== "undefined" &&
+                      {canDelete && dragState && typeof document !== "undefined" &&
                         createPortal(
                           <div
                             ref={zoneRef}
@@ -802,6 +813,12 @@ export default function TimelineClient({
                           <span className="absolute top-1.5 right-1.5 flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-black/40 backdrop-blur-md text-white/90 text-[9px]">
                             <Sparkles className="w-2.5 h-2.5" />
                             AI
+                          </span>
+                        )}
+                        {/* 好友/世界档：标清这是谁写的，别看成自己的 */}
+                        {!canDelete && m.ownerName && (
+                          <span className="absolute top-1.5 left-1.5 max-w-[80%] truncate px-1.5 py-0.5 rounded-full bg-emerald-500/80 backdrop-blur-md text-white text-[9px]">
+                            @{m.ownerName}
                           </span>
                         )}
                       </div>

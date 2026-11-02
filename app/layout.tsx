@@ -19,7 +19,6 @@ import WelcomeScreen from "@/components/layout/WelcomeScreen";
 import BootGate from "@/components/layout/BootGate";
 import SessionGuard from "@/components/layout/SessionGuard";
 import XiaoshiAI from "@/components/shiguang/XiaoshiAI";
-import UserAvatar from "@/components/shiguang/UserAvatar";
 import DevToolsTranslator from "@/components/shiguang/DevToolsTranslator";
 import { siteConfig } from "@/siteConfig";
 
@@ -96,7 +95,6 @@ export default function RootLayout({
                     <KiraSparkle />
                     <ClientWidgets />
                     <XiaoshiAI />
-                    <UserAvatar />
                     <Navbar />
                     <main className="flex-1 pt-16">
                       {children}

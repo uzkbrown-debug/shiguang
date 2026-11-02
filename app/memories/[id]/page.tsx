@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -23,6 +23,15 @@ import { fetchMemoryMedia, type MemoryMediaPage } from "@/app/api/shiguang";
 import { emitDataChanged } from "@/lib/dataBus";
 import StoryNarration from "@/components/shiguang/StoryNarration";
 import MemoryVideoPlayer from "@/components/shiguang/MemoryVideoPlayer";
+import PhotoDanmaku, { type PhotoComment } from "@/components/shiguang/PhotoDanmaku";
+import DanmakuSettingsPanel, {
+  DEFAULT_SETTINGS,
+  loadSettings,
+  saveSettings,
+  type DanmakuSettings,
+} from "@/components/shiguang/DanmakuSettings";
+import { Settings2 } from "lucide-react";
+import { Mic, Send as SendIcon, Square, MessageSquare, Play, Trash } from "lucide-react";
 
 interface CostItem {
   label: string;
@@ -63,6 +72,22 @@ export default function MemoryGalleryPage() {
   const [zoomed, setZoomed] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [savingVis, setSavingVis] = useState<string | null>(null);
+  // 照片留言：按 media_url 分组，点开大图时以弹幕滚过
+  const [comments, setComments] = useState<PhotoComment[]>([]);
+  const [sending, setSending] = useState(false);
+  const [recording, setRecording] = useState(false);
+  // 弹幕设置（速度 / 透明度 / 字号 / 开关），存本地
+  const [dm, setDm] = useState<DanmakuSettings>(DEFAULT_SETTINGS);
+  const [dmOpen, setDmOpen] = useState(false);
+  // 每张照片各自的输入草稿
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  // 留言列表抽屉：谁在这张照片上留过话，一眼看全
+  const [dmListOpen, setDmListOpen] = useState(false);
+  const [deletingComment, setDeletingComment] = useState<string | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const recStartRef = useRef(0);
+  const recTargetRef = useRef<string | null>(null);
   const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
@@ -80,7 +105,14 @@ export default function MemoryGalleryPage() {
           if (!alive) return;
           setData(media);
           setFull(detail as MemoryFull | null);
-          setIndex(0);
+          // 从地图点进来时带 ?photo=<url>：直接翻到那张照片并打开大图（弹幕就在那儿）
+          const wanted =
+            typeof window === "undefined"
+              ? null
+              : new URLSearchParams(window.location.search).get("photo");
+          const hit = wanted ? (media?.photos ?? []).findIndex((p) => p.url === wanted) : -1;
+          setIndex(hit >= 0 ? hit : 0);
+          if (hit >= 0 && media?.photos?.[hit]?.kind !== "video") setZoomed(true);
         })
         .finally(() => {
           if (alive) setLoading(false);
@@ -91,6 +123,138 @@ export default function MemoryGalleryPage() {
       clearTimeout(timer);
     };
   }, [params.id]);
+
+  /** 拉这条记忆下所有照片的留言 */
+  const loadComments = useCallback(() => {
+    fetch(`/api/memories/${params.id}/comments`, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((list) => setComments(Array.isArray(list) ? list : []))
+      .catch(() => setComments([]));
+  }, [params.id]);
+
+  useEffect(() => {
+    const t = setTimeout(loadComments, 0);
+    const s0 = setTimeout(() => setDm(loadSettings()), 0);
+    return () => {
+      clearTimeout(t);
+      clearTimeout(s0);
+    };
+  }, [loadComments]);
+
+  const updateDm = (v: DanmakuSettings) => {
+    setDm(v);
+    saveSettings(v);
+  };
+
+  /** 发文字留言（按照片 url） */
+  const sendTextFor = async (url?: string | null) => {
+    const text = (url ? drafts[url] ?? "" : "").trim();
+    if (!url || !text || sending) return;
+    setSending(true);
+    try {
+      const fd = new FormData();
+      fd.append("media_url", url);
+      fd.append("kind", "text");
+      fd.append("content", text);
+      const r = await fetch(`/api/memories/${params.id}/comments`, { method: "POST", body: fd });
+      if (r.ok) {
+        setDrafts((d) => ({ ...d, [url]: "" }));
+        loadComments();
+      }
+    } finally {
+      setSending(false);
+    }
+  };
+
+  /** 语音留言：录完直接发 */
+  const sendVoice = async (blob: Blob, durationMs: number, urlOverride?: string) => {
+    const url = urlOverride ?? photos[index]?.url;
+    if (!url || !blob.size) return;
+    setSending(true);
+    try {
+      const fd = new FormData();
+      fd.append("media_url", url);
+      fd.append("kind", "voice");
+      fd.append("duration_ms", String(durationMs));
+      fd.append("audio", blob, "voice.webm");
+      const r = await fetch(`/api/memories/${params.id}/comments`, { method: "POST", body: fd });
+      if (r.ok) loadComments();
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const startRec = async (urlOverride?: string) => {
+    if (recording) return;
+    recTargetRef.current = urlOverride ?? photos[index]?.url ?? null;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const rec = new MediaRecorder(stream);
+      chunksRef.current = [];
+      rec.ondataavailable = (e) => {
+        if (e.data.size) chunksRef.current.push(e.data);
+      };
+      rec.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(chunksRef.current, { type: rec.mimeType || "audio/webm" });
+        void sendVoice(blob, Date.now() - recStartRef.current, recTargetRef.current ?? undefined);
+      };
+      // 事件处理器里取时间戳，不是渲染期
+      // eslint-disable-next-line react-hooks/purity
+      recStartRef.current = Date.now();
+      rec.start();
+      recorderRef.current = rec;
+      setRecording(true);
+    } catch {
+      /* 没给麦克风权限就算了 */
+    }
+  };
+
+  const stopRec = () => {
+    recorderRef.current?.stop();
+    recorderRef.current = null;
+    setRecording(false);
+  };
+
+  /** 删一条留言：自己的、或者自己照片下的别人的 */
+  const removeComment = async (id: string) => {
+    if (deletingComment) return;
+    setDeletingComment(id);
+    try {
+      const r = await fetch(`/api/comments/${id}`, { method: "DELETE" });
+      if (r.ok) {
+        setComments((list) => list.filter((c) => c.id !== id));
+      }
+    } finally {
+      setDeletingComment(null);
+    }
+  };
+
+  /** 播一条语音留言 */
+  const playVoice = (url?: string | null) => {
+    if (!url) return;
+    const audio = new Audio(url);
+    void audio.play().catch(() => {});
+  };
+
+  /** 2026-11-02 22:02:50 → 11月2日 22:02 */
+  const whenText = (raw?: string | null) => {
+    if (!raw) return "";
+    const d = new Date(raw.replace(" ", "T"));
+    if (Number.isNaN(d.getTime())) return raw.slice(0, 10);
+    return `${d.getMonth() + 1}月${d.getDate()}日 ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  };
+
+  /** 从地图点进来的，返回就回地图；别的一律回上一页 */
+  const goBack = () => {
+    const from = new URLSearchParams(window.location.search).get("from");
+    if (from === "map") {
+      router.push("/map");
+      return;
+    }
+    if (window.history.length > 1) router.back();
+    else router.push("/timeline");
+  };
 
   /** 改可见性：仅自己 / 好友 / 公开，改完立刻生效 */
   const changeVisibility = async (value: "private" | "friends" | "public") => {
@@ -199,7 +363,7 @@ export default function MemoryGalleryPage() {
 
         <div className="absolute inset-x-0 top-0 p-4 flex items-center gap-2">
           <button
-            onClick={() => router.back()}
+            onClick={goBack}
             className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-950/50 text-white text-xs hover:bg-slate-950/70 transition-colors"
           >
             <ArrowLeft className="w-3.5 h-3.5" /> 返回
@@ -310,38 +474,50 @@ export default function MemoryGalleryPage() {
             照片
             <span className="ml-2 text-[11px] font-normal text-slate-400">点开可以放大、左右翻</span>
           </h2>
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {photos.map((photo, i) => (
-              <button
-                key={photo.id}
-                onClick={() => {
-                  setIndex(i);
-                  if (photo.kind !== "video") setZoomed(true);
-                }}
-                className="relative rounded-xl overflow-hidden group aspect-[4/3] border border-white/40 dark:border-white/10"
-              >
-                {photo.kind === "video" ? (
-                  <>
-                    {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
-                    <video src={photo.url} muted preload="metadata" className="w-full h-full object-cover" />
-                    <span className="absolute inset-0 flex items-center justify-center bg-black/35 text-white/90">
-                      <Film className="w-5 h-5" />
-                    </span>
-                  </>
-                ) : (
-                  /* eslint-disable-next-line @next/next/no-img-element */
-                  <img
-                    src={photo.url}
-                    alt={photo.caption}
-                    className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform"
+              <div key={photo.id} className="space-y-2">
+                {/* 照片本身：弹幕滚在上面 */}
+                <div className="relative rounded-xl overflow-hidden group aspect-[4/3] border border-white/40 dark:border-white/10">
+                  <button
+                    onClick={() => {
+                      setIndex(i);
+                      if (photo.kind !== "video") setZoomed(true);
+                    }}
+                    className="block w-full h-full"
+                  >
+                    {photo.kind === "video" ? (
+                      <>
+                        {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+                        <video src={photo.url} muted preload="metadata" className="w-full h-full object-cover" />
+                        <span className="absolute inset-0 flex items-center justify-center bg-black/35 text-white/90">
+                          <Film className="w-5 h-5" />
+                        </span>
+                      </>
+                    ) : (
+                      /* eslint-disable-next-line @next/next/no-img-element */
+                      <img
+                        src={photo.url}
+                        alt={photo.caption}
+                        className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform"
+                      />
+                    )}
+                  </button>
+
+                  <PhotoDanmaku
+                    compact
+                    settings={dm}
+                    items={comments.filter((c) => c.media_url === photo.url)}
                   />
-                )}
-                {photo.caption && (
-                  <span className="absolute inset-x-0 bottom-0 px-2 py-1 text-[10px] text-white text-left bg-gradient-to-t from-slate-950/85 to-transparent truncate">
-                    {photo.caption}
-                  </span>
-                )}
-              </button>
+
+                  {photo.caption && (
+                    <span className="pointer-events-none absolute inset-x-0 bottom-0 px-2 py-1 text-[10px] text-white text-left bg-gradient-to-t from-slate-950/85 to-transparent truncate">
+                      {photo.caption}
+                    </span>
+                  )}
+                </div>
+
+              </div>
             ))}
           </div>
         </section>
@@ -502,7 +678,7 @@ export default function MemoryGalleryPage() {
               </>
             )}
 
-            <div className="max-w-5xl w-full flex flex-col items-center gap-3" onClick={(e) => e.stopPropagation()}>
+            <div className="max-w-5xl w-full flex flex-col items-center gap-3 pb-28" onClick={(e) => e.stopPropagation()}>
               {photos[index]?.kind === "video" ? (
                 <div className="w-full max-w-3xl">
                   <MemoryVideoPlayer src={photos[index].url} />
@@ -512,14 +688,159 @@ export default function MemoryGalleryPage() {
                 <img
                   src={photos[index]?.url}
                   alt=""
-                  className="max-h-[78vh] max-w-full object-contain rounded-xl"
+                  className="max-h-[64vh] max-w-full object-contain rounded-xl"
                 />
               )}
+
               <div className="text-[11px] text-white/70">
                 {index + 1} / {total}
                 {photos[index]?.caption ? ` · ${photos[index].caption}` : ""}
               </div>
+
             </div>
+
+          {/* 弹幕：覆盖整屏，从右边飘进来，可以飘到照片外面 */}
+          {photos[index]?.kind !== "video" && (
+            <PhotoDanmaku
+              settings={dm}
+              items={comments.filter((c) => c.media_url === photos[index]?.url)}
+            />
+          )}
+
+          {/* 底部固定留言条：照片底下永远看得见 */}
+          {photos[index]?.kind !== "video" && photos[index]?.url && (
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="absolute inset-x-0 bottom-0 z-10 px-4 pb-4 pt-12 bg-gradient-to-t from-slate-950 via-slate-950/90 to-transparent"
+            >
+              <div className="max-w-2xl mx-auto">
+                {/* 留言列表：好友留的弹幕在这里一条条看得见，也能删掉自己的 */}
+                {dmListOpen && (
+                  <div className="mb-2 max-h-[38vh] overflow-y-auto rounded-2xl border border-white/15 bg-slate-950/85 backdrop-blur-xl p-1.5 shadow-2xl">
+                    {comments.filter((c) => c.media_url === photos[index]?.url).length === 0 ? (
+                      <p className="px-3 py-4 text-center text-[11.5px] text-white/45">
+                        还没有人留言，说第一句吧。
+                      </p>
+                    ) : (
+                      comments
+                        .filter((c) => c.media_url === photos[index]?.url)
+                        .map((c) => (
+                          <div
+                            key={c.id}
+                            className="flex items-start gap-2 rounded-xl px-2.5 py-2 hover:bg-white/[0.06]"
+                          >
+                            {c.avatar ? (
+                              /* eslint-disable-next-line @next/next/no-img-element */
+                              <img
+                                src={c.avatar}
+                                alt=""
+                                className="mt-0.5 h-7 w-7 shrink-0 rounded-full object-cover"
+                              />
+                            ) : (
+                              <span className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-white/15 text-[10px] text-white/80">
+                                {(c.nickname ?? "某").slice(0, 1)}
+                              </span>
+                            )}
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-1.5 text-[10.5px] text-white/50">
+                                <span className="truncate text-white/80">{c.nickname ?? "某人"}</span>
+                                {c.is_mine && (
+                                  <span className="rounded bg-sky-500/25 px-1 py-px text-[9px] text-sky-200">
+                                    我
+                                  </span>
+                                )}
+                                <span className="ml-auto shrink-0 tabular-nums">
+                                  {whenText(c.created_at)}
+                                </span>
+                              </div>
+                              {c.kind === "voice" ? (
+                                <button
+                                  onClick={() => playVoice(c.audio_url)}
+                                  className="mt-1 inline-flex items-center gap-1 rounded-lg bg-white/10 px-2 py-1 text-[11.5px] text-white/85 hover:bg-white/20"
+                                >
+                                  <Play className="h-3 w-3" />
+                                  语音 {Math.round((c.duration_ms ?? 0) / 1000)}&quot;
+                                </button>
+                              ) : (
+                                <p className="mt-0.5 break-words text-[12.5px] leading-relaxed text-white/90">
+                                  {c.content}
+                                </p>
+                              )}
+                            </div>
+                            {c.can_delete && (
+                              <button
+                                onClick={() => void removeComment(c.id)}
+                                disabled={deletingComment === c.id}
+                                title="删掉这条留言"
+                                className="mt-1 shrink-0 rounded-lg p-1 text-white/35 hover:bg-rose-500/20 hover:text-rose-300 disabled:opacity-40"
+                              >
+                                <Trash className="h-3.5 w-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        ))
+                    )}
+                  </div>
+                )}
+
+                <div className="flex items-center gap-2">
+                <input
+                  value={drafts[photos[index]!.url] ?? ""}
+                  onChange={(e) => setDrafts((d) => ({ ...d, [photos[index]!.url]: e.target.value }))}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.nativeEvent.isComposing) void sendTextFor(photos[index]?.url);
+                  }}
+                  placeholder="给这张照片留一句话，它会变成弹幕…"
+                  maxLength={140}
+                  className="flex-1 min-w-0 px-3.5 py-2.5 rounded-xl bg-white/10 border border-white/20 text-[12.5px] text-white placeholder:text-white/40 outline-none focus:border-sky-400/60"
+                />
+                <button
+                  onClick={() => void sendTextFor(photos[index]?.url)}
+                  disabled={sending || !(drafts[photos[index]!.url] ?? "").trim()}
+                  className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-sky-500 text-white text-[12px] font-medium disabled:opacity-40"
+                >
+                  <SendIcon className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">发送</span>
+                </button>
+                <button
+                  onClick={() => (recording ? stopRec() : void startRec())}
+                  disabled={sending}
+                  title={recording ? "点一下结束并发送语音" : "录一段语音弹幕"}
+                  className={`flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl text-[12px] font-medium disabled:opacity-40 ${
+                    recording ? "bg-rose-500 text-white animate-pulse" : "bg-white/10 border border-white/20 text-white/80"
+                  }`}
+                >
+                  {recording ? <Square className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5" />}
+                  <span className="hidden sm:inline">{recording ? "结束" : "语音"}</span>
+                </button>
+                <button
+                  onClick={() => setDmListOpen((v) => !v)}
+                  title="看看这张照片上的留言"
+                  className={`relative flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl text-[12px] font-medium ${
+                    dmListOpen ? "bg-sky-500/25 text-sky-200 border border-sky-400/40" : "bg-white/10 border border-white/20 text-white/80"
+                  }`}
+                >
+                  <MessageSquare className="w-3.5 h-3.5" />
+                  {comments.filter((c) => c.media_url === photos[index]?.url).length}
+                </button>
+                <div className="relative">
+                  <button
+                    onClick={() => setDmOpen((v) => !v)}
+                    title="弹幕设置"
+                    className={`grid place-items-center w-10 h-10 rounded-xl ${
+                      dmOpen ? "bg-sky-500/25 text-sky-300" : "bg-white/10 border border-white/20 text-white/70"
+                    }`}
+                  >
+                    <Settings2 className="w-4 h-4" />
+                  </button>
+                  {dmOpen && (
+                    <DanmakuSettingsPanel value={dm} onChange={updateDm} onClose={() => setDmOpen(false)} />
+                  )}
+                </div>
+                </div>
+              </div>
+            </div>
+          )}
           </motion.div>
         )}
       </AnimatePresence>

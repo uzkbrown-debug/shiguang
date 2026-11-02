@@ -256,7 +256,7 @@ function TravelInner() {
             {(
               [
                 ["me", "只看我"],
-                ["all", "好友"],
+                ["friends", "好友"],
                 ["world", "全世界"],
               ] as [string, string][]
             ).map(([value, label]) => (
@@ -273,8 +273,8 @@ function TravelInner() {
                 title={
                   value === "world"
                     ? "包含陌生人公开分享的攻略与路线"
-                    : value === "all"
-                      ? "我和我的好友"
+                    : value === "friends"
+                      ? "只有好友写的，不含自己"
                       : "只有我自己"
                 }
               >
@@ -317,10 +317,20 @@ function TravelInner() {
           </div>
         ) : tab === "guides" ? (
           filteredGuides.length === 0 ? (
-            <EmptyState
-              text="还没有攻略。写下第一篇，好友就能看见了。"
-              action={{ href: "/travel/new", label: "写第一篇攻略" }}
-            />
+            scope === "me" ? (
+              <EmptyState
+                text="还没有攻略。写下第一篇，好友就能看见了。"
+                action={{ href: "/travel/new", label: "写第一篇攻略" }}
+              />
+            ) : (
+              <EmptyState
+                text={
+                  scope === "friends"
+                    ? "好友还没写过攻略，或者他们没把攻略开给你看。"
+                    : "还没有人公开自己的攻略。"
+                }
+              />
+            )
           ) : (
             // 攻略卡换成相纸：直接贴在深色页面上，不额外铺底板，免得突兀
             <div className="grid grid-cols-1 gap-x-10 gap-y-14 sm:grid-cols-2 lg:grid-cols-3">
@@ -371,6 +381,7 @@ function TravelInner() {
           )
         ) : tab === "timeline" ? (
           <TimelineClient
+            scope={scope as "me" | "friends" | "world"}
             refreshKey={dataVersion}
             onChanged={() => {
               // 时间轴里删了一条记忆：攻略/路线的引用可能失效，这边跟着刷新
@@ -380,10 +391,20 @@ function TravelInner() {
             }}
           />
         ) : filteredRoutes.length === 0 ? (
-          <EmptyState
-            text="还没有路线。把去过的地方按顺序连起来，地图上就有一条线。"
-            action={{ href: "/travel/route/new", label: "画第一条路线" }}
-          />
+          scope === "me" ? (
+            <EmptyState
+              text="还没有路线。把去过的地方按顺序连起来，地图上就有一条线。"
+              action={{ href: "/travel/route/new", label: "画第一条路线" }}
+            />
+          ) : (
+            <EmptyState
+              text={
+                scope === "friends"
+                  ? "好友还没画过路线，或者他们没把路线开给你看。"
+                  : "还没有人公开自己的路线。"
+              }
+            />
+          )
         ) : (
           <div className="space-y-4">
             {filteredRoutes.map((r) => (
@@ -455,17 +476,26 @@ function TravelInner() {
   );
 }
 
-function EmptyState({ text, action }: { text: string; action: { href: string; label: string } }) {
+function EmptyState({
+  text,
+  action,
+}: {
+  text: string;
+  /** 只有自己的档位才给「去写一篇」这种入口 */
+  action?: { href: string; label: string };
+}) {
   return (
     <div className="py-16 text-center">
       <p className="text-xs text-slate-400">{text}</p>
-      <Link
-        href={action.href}
-        className="inline-flex items-center gap-1.5 mt-4 px-4 py-2 rounded-xl bg-emerald-500 text-white text-xs hover:bg-emerald-600 transition-colors"
-      >
-        <Plus className="w-3.5 h-3.5" />
-        {action.label}
-      </Link>
+      {action && (
+        <Link
+          href={action.href}
+          className="inline-flex items-center gap-1.5 mt-4 px-4 py-2 rounded-xl bg-emerald-500 text-white text-xs hover:bg-emerald-600 transition-colors"
+        >
+          <Plus className="w-3.5 h-3.5" />
+          {action.label}
+        </Link>
+      )}
     </div>
   );
 }

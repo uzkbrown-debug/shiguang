@@ -7,6 +7,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { useTheme } from "@/components/providers/ThemeProvider";
 
 import SettingsPanel from "@/components/ui/SettingsPanel";
+import UserAvatar from "@/components/shiguang/UserAvatar";
 import {
   Plus,
   Sun,
@@ -320,6 +321,9 @@ export default function Navbar() {
                   <Menu className="w-5 h-5" />
                 )}
               </button>
+
+              {/* 头像：固定在这里，不跟着页面滚、也不能拖走 */}
+              <UserAvatar />
             </div>
           </div>
         </div>

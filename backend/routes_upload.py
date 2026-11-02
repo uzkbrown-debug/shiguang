@@ -297,8 +297,8 @@ def _random_guess_place(db: Session) -> Location | None:
 async def upload_memory(
     file: UploadFile | None = File(None),
     files: list[UploadFile] | None = File(None),
-    # 默认只有自己看得到：要给别人看，得自己改可见性
-    visibility: str = Form("private"),
+    # 默认好友可见：好友之间能互相看到照片、互相留弹幕；不想给看就选「仅自己」
+    visibility: str = Form("friends"),
     db: Session = Depends(get_db),
     viewer: User | None = Depends(optional_user),
 ):
@@ -934,7 +934,11 @@ def analyze_days(
 
 
 @router.delete("/memories/{memory_id}")
-def delete_memory(memory_id: str, db: Session = Depends(get_db)):
+def delete_memory(
+    memory_id: str,
+    db: Session = Depends(get_db),
+    viewer: User = Depends(current_user),
+):
     """删除记忆，并把所有指向它的引用一起清掉
 
     - 媒体行与已上传文件：删
@@ -946,6 +950,8 @@ def delete_memory(memory_id: str, db: Session = Depends(get_db)):
     memory = db.get(Memory, memory_id)
     if not memory:
         raise HTTPException(404, "记忆不存在")
+    if memory.user_id != viewer.id:
+        raise HTTPException(403, "只能删自己的记忆")
 
     medias = db.scalars(select(MemoryMedia).where(MemoryMedia.memory_id == memory_id)).all()
     for item in medias:

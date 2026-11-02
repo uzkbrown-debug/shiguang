@@ -690,3 +690,9 @@ html[data-boot="1"] body > *:not(.sg-boot-overlay) {
   animation: sg-shatter-shard 0.75s ease-out forwards;
   pointer-events: none;
 }
+
+/* 照片弹幕：从右往左横穿 */
+@keyframes dm-run {
+  from { left: 100%; }
+  to   { left: -100%; }
+}

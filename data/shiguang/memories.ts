@@ -46,6 +46,8 @@ export interface ShiguangMemory {
   confidence: number;
   aiGenerated: boolean;
   mediaCount: number;
+  /** 这条记忆是谁写的：好友/公开档里标在卡片上，避免看成自己的 */
+  ownerName?: string;
 }
 
 export interface ShiguangStory {

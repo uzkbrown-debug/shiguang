@@ -114,8 +114,8 @@ export default function UploadPage() {
   const inputRef = useRef<HTMLInputElement>(null);
 
   const [stage, setStage] = useState<Stage>("idle");
-  // 默认「仅自己」：上传的记忆不该默认就给别人看
-  const [visibility, setVisibility] = useState("private");
+  // 默认「好友可见」：好友之间要能互相看到照片、互相留弹幕
+  const [visibility, setVisibility] = useState("friends");
   const [dragging, setDragging] = useState(false);
   const [progress, setProgress] = useState(0);
   const [steps, setSteps] = useState<StepInfo[]>([]);
@@ -752,6 +752,10 @@ export default function UploadPage() {
                     return (
                       <div
                         key={n}
+                        onDragOverCapture={(e) => {
+                          // 卡片里有输入框：拖到文字上也得能落下来，否则会出现「拖到一半卡住」
+                          if (!splitLocked) e.preventDefault();
+                        }}
                         onDragOver={(e) => {
                           if (splitLocked) return;
                           e.preventDefault();
@@ -765,6 +769,7 @@ export default function UploadPage() {
                           setDropDay(null);
                           if (splitLocked) return;
                           e.preventDefault();
+                          e.stopPropagation();
                           const url = e.dataTransfer.getData("text/plain");
                           if (url) setDayOf((d) => ({ ...d, [url]: n }));
                         }}
@@ -828,8 +833,10 @@ export default function UploadPage() {
                                 draggable={!splitLocked}
                                 onDragStart={(e) => {
                                   if (splitLocked) return;
+                                  e.dataTransfer.effectAllowed = "move";
                                   e.dataTransfer.setData("text/plain", m.url);
                                 }}
+                                onDragEnd={() => setDropDay(null)}
                                 onClick={() => {
                                   if (splitLocked) return;
                                   setDayOf((d) => ({ ...d, [m.url]: (n % dayCount) + 1 }));
@@ -849,7 +856,12 @@ export default function UploadPage() {
                                   </span>
                                 ) : (
                                   // eslint-disable-next-line @next/next/no-img-element
-                                  <img src={m.url} alt="" className="w-full h-full object-cover" />
+                                  <img
+                                    src={m.url}
+                                    alt=""
+                                    draggable={false}
+                                    className="w-full h-full object-cover pointer-events-none"
+                                  />
                                 )}
                               </span>
                             );
@@ -870,6 +882,7 @@ export default function UploadPage() {
                       onDrop={(e) => {
                         setDropNew(false);
                         e.preventDefault();
+                        e.stopPropagation();
                         const url = e.dataTransfer.getData("text/plain");
                         if (!url) return;
                         // 拖到这儿就是「给这张图开新的一天」

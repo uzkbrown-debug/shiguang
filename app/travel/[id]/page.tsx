@@ -16,8 +16,13 @@ import {
   X,
   Route as RouteIcon,
   Images,
+  MessageSquare,
 } from "lucide-react";
 import FriendButton from "@/components/shiguang/FriendButton";
+import PhotoDanmaku from "@/components/shiguang/PhotoDanmaku";
+import DanmakuDock from "@/components/shiguang/DanmakuDock";
+import { DEFAULT_SETTINGS, loadSettings, saveSettings, type DanmakuSettings } from "@/components/shiguang/DanmakuSettings";
+import { useMediaComments } from "@/lib/mediaComments";
 import {
   deleteGuide,
   fetchGuide,
@@ -34,6 +39,30 @@ export default function GuideDetailPage({ params }: { params: Promise<{ id: stri
   const [loading, setLoading] = useState(true);
   const [zoom, setZoom] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // 照片弹幕：攻略的封面 / 每天配图 / 图集都能留话
+  const mc = useMediaComments("guide", id);
+  const [dm, setDm] = useState<DanmakuSettings>(DEFAULT_SETTINGS);
+
+  useEffect(() => {
+    const t = setTimeout(() => setDm(loadSettings()), 0);
+    return () => clearTimeout(t);
+  }, []);
+
+  const updateDm = (v: DanmakuSettings) => {
+    setDm(v);
+    saveSettings(v);
+  };
+
+  /** 返回来源页：从地图点进来就回地图，直接打开才回旅行广场 */
+  const goBack = () => {
+    const from = new URLSearchParams(window.location.search).get("from");
+    if (from === "map") {
+      router.push("/map");
+      return;
+    }
+    if (window.history.length > 1) router.back();
+    else router.push("/travel");
+  };
 
   useEffect(() => {
     fetchMe().then((me) => setMyId(me?.id ?? null));
@@ -67,12 +96,45 @@ export default function GuideDetailPage({ params }: { params: Promise<{ id: stri
     <div className="w-full pb-16 relative z-10">
       {zoom && (
         <div
-          className="fixed inset-0 z-[300] bg-slate-950/95 flex items-center justify-center p-6"
+          className="fixed inset-0 z-[300] bg-slate-950/95"
           onClick={() => setZoom(null)}
         >
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={zoom} alt="" className="max-w-full max-h-full rounded-xl object-contain" />
-          <button className="absolute top-6 right-6 p-2 rounded-lg bg-white/10 text-white">
+          {/* 弹幕：整屏飘，飘到照片外面也行 */}
+          <PhotoDanmaku settings={dm} items={mc.of(zoom)} />
+
+          <div className="relative z-10 h-full flex flex-col items-center justify-center gap-3 pb-28 px-6 pointer-events-none">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={zoom} alt="" className="max-w-full max-h-[62vh] rounded-xl object-contain pointer-events-auto" />
+            <div className="flex items-center gap-2 text-[11px] text-white/60">
+              <MessageSquare className="h-3 w-3" />
+              {mc.of(zoom).length} 条留言
+            </div>
+          </div>
+
+          {/* 底部留言条：照片底下永远看得见 */}
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="absolute inset-x-0 bottom-0 z-20 px-4 pb-4 pt-12 bg-gradient-to-t from-slate-950 via-slate-950/90 to-transparent"
+          >
+            <DanmakuDock
+              items={mc.of(zoom)}
+              draft={mc.drafts[zoom] ?? ""}
+              onDraft={(v) => mc.setDraft(zoom, v)}
+              onSend={() => void mc.sendText(zoom)}
+              sending={mc.sending}
+              recording={mc.recording}
+              onToggleRec={() => (mc.recording ? mc.stopRec() : void mc.startRec(zoom))}
+              onDelete={(id) => void mc.remove(id)}
+              onPlayVoice={mc.playVoice}
+              dm={dm}
+              onDm={updateDm}
+            />
+          </div>
+
+          <button
+            onClick={() => setZoom(null)}
+            className="absolute top-6 right-6 z-20 p-2 rounded-lg bg-white/10 text-white"
+          >
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -110,14 +172,17 @@ export default function GuideDetailPage({ params }: { params: Promise<{ id: stri
           // eslint-disable-next-line @next/next/no-img-element
           <img src={guide.cover} alt="" className="w-full h-full object-cover" />
         ) : null}
+        {/* 封面上的弹幕 */}
         <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/50 to-slate-950/20" />
+        {guide.cover ? <PhotoDanmaku compact settings={dm} items={mc.of(guide.cover)} /> : null}
         <div className="absolute inset-x-0 top-0 p-4 flex items-center gap-2">
-          <Link
-            href="/travel"
+          <button
+            onClick={goBack}
+            title="返回上一页"
             className="p-2 rounded-lg bg-slate-950/50 text-white hover:bg-slate-950/70 transition-colors"
           >
             <ArrowLeft className="w-4 h-4" />
-          </Link>
+          </button>
           <div className="ml-auto flex items-center gap-2">
             {mine ? (
               <>
@@ -228,17 +293,20 @@ export default function GuideDetailPage({ params }: { params: Promise<{ id: stri
 
                   {d.image_url ? (
                     <div className="mt-3 flex flex-col sm:flex-row gap-4">
-                      <button
-                        onClick={() => setZoom(d.image_url!)}
-                        className="sm:w-1/2 shrink-0 rounded-xl overflow-hidden group"
-                      >
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={d.image_url}
-                          alt=""
-                          className="w-full aspect-[4/3] object-cover group-hover:scale-[1.02] transition-transform"
-                        />
-                      </button>
+                      <div className="relative sm:w-1/2 shrink-0 rounded-xl overflow-hidden group">
+                        <button
+                          onClick={() => setZoom(d.image_url!)}
+                          className="block w-full"
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={d.image_url}
+                            alt=""
+                            className="w-full aspect-[4/3] object-cover group-hover:scale-[1.02] transition-transform"
+                          />
+                        </button>
+                        <PhotoDanmaku compact settings={dm} items={mc.of(d.image_url)} />
+                      </div>
                       <p className="flex-1 text-xs leading-relaxed text-slate-600 dark:text-slate-300 whitespace-pre-wrap">
                         {d.content}
                       </p>
@@ -319,19 +387,18 @@ export default function GuideDetailPage({ params }: { params: Promise<{ id: stri
             </h2>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               {guide.media.map((m, i) => (
-                <button
-                  key={m.id ?? i}
-                  onClick={() => setZoom(m.url)}
-                  className="relative rounded-xl overflow-hidden group"
-                >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={m.url} alt="" className="w-full aspect-[4/3] object-cover group-hover:scale-[1.03] transition-transform" />
+                <div key={m.id ?? i} className="relative rounded-xl overflow-hidden group">
+                  <button onClick={() => setZoom(m.url)} className="block w-full">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={m.url} alt="" className="w-full aspect-[4/3] object-cover group-hover:scale-[1.03] transition-transform" />
+                  </button>
+                  <PhotoDanmaku compact settings={dm} items={mc.of(m.url)} />
                   {m.caption && (
-                    <span className="absolute inset-x-0 bottom-0 px-2 py-1 text-[10px] text-white bg-gradient-to-t from-slate-950/80 to-transparent text-left">
+                    <span className="pointer-events-none absolute inset-x-0 bottom-0 px-2 py-1 text-[10px] text-white bg-gradient-to-t from-slate-950/80 to-transparent text-left">
                       {m.caption}
                     </span>
                   )}
-                </button>
+                </div>
               ))}
             </div>
           </section>

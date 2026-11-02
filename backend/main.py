@@ -62,6 +62,16 @@ app.include_router(social_router)
 # 旅行路线 / 旅游攻略 / 地图共享
 app.include_router(travel_router)
 
+# 首页天气卡（open-meteo，失败返回 ok=false）
+from routes_weather import router as weather_router  # noqa: E402
+
+app.include_router(weather_router)
+
+# 照片留言（点开大图时的弹幕）
+from routes_comments import router as comments_router  # noqa: E402
+
+app.include_router(comments_router)
+
 
 # ---------- 序列化 ----------
 
@@ -270,6 +280,16 @@ def list_memories(
         for it in items:
             if not it.get("cover"):
                 it["cover"] = first_photo.get(it["id"])
+
+    # 好友 / 世界档里要写清这是谁的相册，前端相纸下面的小字直接用
+    owners = {m.user_id for m in rows if m.user_id}
+    if owners:
+        names = {
+            u.id: (u.nickname or u.username)
+            for u in db.scalars(select(User).where(User.id.in_(owners)))
+        }
+        for it in items:
+            it["owner_name"] = names.get(it.get("user_id") or "")
     return items
 
 

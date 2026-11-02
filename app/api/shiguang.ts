@@ -44,6 +44,10 @@ export interface MemoryBrief {
   ai_status?: string;
   ai_generated?: boolean;
   confidence?: number;
+  user_id?: string;
+  visibility?: string;
+  /** 这条记忆是谁的：好友/公开列表里用来标注作者 */
+  owner_name?: string;
 }
 
 /** 后端字段 → 前端内部使用的结构（时间线/地图/人物页共用） */
@@ -66,6 +70,7 @@ export function toShiguangMemory(m: MemoryBrief): ShiguangMemory {
     confidence: m.confidence ?? 0.8,
     aiGenerated: Boolean(m.ai_generated),
     mediaCount: m.media_count ?? 0,
+    ownerName: m.owner_name,
   };
 }
 
@@ -147,12 +152,13 @@ export async function fetchMemoryMedia(memoryId: string): Promise<MemoryMediaPag
 }
 
 /** 记忆列表（后端优先） */
-export async function fetchMemories(params?: { year?: number; limit?: number }): Promise<{
+export async function fetchMemories(params?: { year?: number; limit?: number; scope?: string }): Promise<{
   items: MemoryBrief[];
   source: "backend" | "local";
 }> {
   const query = new URLSearchParams();
   if (params?.year) query.set("year", String(params.year));
+  if (params?.scope) query.set("scope", params.scope);
   query.set("limit", String(params?.limit ?? 200));
 
   const remote = await getJSON<MemoryBrief[]>(`/api/memories?${query.toString()}`);
