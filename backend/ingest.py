@@ -26,7 +26,11 @@ _TAG_MODEL = 272
 _TAG_GPS = 34853
 
 # 文件名里这些形式说明没有语义，需要另取标题
-_MEANINGLESS = re.compile(r"^(img|dsc|image|photo|screenshot|微信图片|wx_?|mmexport|screenshot_)[-_0-9]*$", re.I)
+_MEANINGLESS = re.compile(
+    r"^(img|dsc|dscn|p|image|photo|picture|screenshot|微信图片|wx_?|mmexport|oip|download|"
+    r"file_?|cam|capture|untitled|新建|无标题)[-_0-9a-z]*$",
+    re.I,
+)
 _DATE_PATTERNS = [
     (re.compile(r"(20\d{2})[-/年](\d{1,2})[-/月](\d{1,2})"), True),
     (re.compile(r"(20\d{2})[-/年](\d{1,2})"), False),
@@ -322,7 +326,10 @@ def guess_title(filename: str, content: str = "", happened_at: str | None = None
             return sentence[:30]
 
     stem = Path(filename).stem.strip()
-    if not _MEANINGLESS.match(stem) and len(stem) >= 2:
+    # 文件名本身没信息量（OIP-C、纯 hash、IMG_0001）就别拿它当标题
+    if re.fullmatch(r"[0-9a-f]{12,64}", stem, re.I):
+        stem = ""
+    if stem and not _MEANINGLESS.match(stem) and len(stem) >= 2:
         return stem[:60]
 
     if happened_at:

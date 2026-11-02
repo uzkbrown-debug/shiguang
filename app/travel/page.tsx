@@ -2,16 +2,13 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { motion } from "framer-motion";
 import {
   Route as RouteIcon,
   BookOpen,
   Plus,
   Search,
-  MapPin,
-  Wallet,
-  CalendarDays,
   Users,
   Lock,
   Globe,
@@ -21,6 +18,7 @@ import {
 } from "lucide-react";
 import {
   colorFor,
+  deleteGuide,
   fetchGuides,
   fetchRoutes,
   VISIBILITY_LABEL,
@@ -28,7 +26,19 @@ import {
   type TravelRouteItem,
 } from "@/lib/travel";
 import { fetchExplore, type ExploreOwner } from "@/lib/travel";
+import { fetchMe } from "@/lib/session";
+import { emitDataChanged, useDataChanged } from "@/lib/dataBus";
 import TimelineClient from "@/app/timeline/TimelineClient";
+import FlameTrashZone from "@/components/shiguang/FlameTrashZone";
+import PolaroidCard from "@/components/shiguang/PolaroidCard";
+
+/** 2026-11-01T20:14:02 → 2026年11月1日 */
+function cnDate(raw?: string | null): string {
+  if (!raw) return "";
+  const d = new Date(String(raw).replace(" ", "T"));
+  if (Number.isNaN(d.getTime())) return String(raw).slice(0, 10);
+  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
+}
 
 const VIS_ICON = { private: Lock, friends: Users, public: Globe } as const;
 
@@ -43,16 +53,34 @@ function VisBadge({ visibility }: { visibility: string }) {
 }
 
 function TravelInner() {
-  const router = useRouter();
   const params = useSearchParams();
   const [tab, setTab] = useState<"guides" | "routes" | "timeline">("guides");
-  const [scope, setScope] = useState("all");
+  // 默认看自己的：「好友」档只装好友的东西，不含自己
+  const [scope, setScope] = useState("me");
   const [q, setQ] = useState("");
   const [destination, setDestination] = useState(params.get("destination") ?? "");
   const [guides, setGuides] = useState<GuideBrief[]>([]);
   const [routes, setRoutes] = useState<TravelRouteItem[]>([]);
   const [owners, setOwners] = useState<ExploreOwner[]>([]);
   const [loading, setLoading] = useState(true);
+  // 拖拽删除：只允许删自己的攻略
+  const [myId, setMyId] = useState<string | null>(null);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [overFlame, setOverFlame] = useState(false);
+  const [burningId, setBurningId] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  // 三个视图（攻略 / 路线 / 时间轴）共用一批内容，任一处删了都要一起刷新
+  const [dataVersion, setDataVersion] = useState(0);
+
+  useEffect(() => {
+    fetchMe().then((me) => setMyId(me?.id ?? null));
+  }, []);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = window.setTimeout(() => setToast(null), 2600);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -70,8 +98,71 @@ function TravelInner() {
   }, [scope, q]);
 
   useEffect(() => {
-    load();
+    // 放到下一个 tick 再拉：避免在 effect 体里同步 setState（React 19 的规则）
+    const id = setTimeout(() => void load(), 0);
+    return () => clearTimeout(id);
   }, [load]);
+
+  // 任何地方（时间轴删记忆、上传新记忆）改了数据，这里三个 tab 一起刷新
+  useDataChanged(
+    useCallback(
+      (change) => {
+        if (change.kind === "memory" || change.kind === "route") {
+          setDataVersion((v) => v + 1);
+          void load();
+        }
+      },
+      [load],
+    ),
+  );
+
+  const isMine = (guide: GuideBrief) => Boolean(myId && guide.user_id === myId);
+
+  // 正在拖的那篇（可能不是自己的）
+  const draggingGuide = useMemo(
+    () => (draggingId ? guides.find((g) => g.id === draggingId) ?? null : null),
+    [guides, draggingId],
+  );
+  const canBurn = draggingGuide ? isMine(draggingGuide) : true;
+
+  /** 松手：把被拖的攻略从列表里烧掉 */
+  const burnGuide = async (id: string) => {
+    setOverFlame(false);
+    setDraggingId(null);
+
+    const guide = guides.find((g) => g.id === id);
+    if (!guide) return;
+
+    // myId 可能还没拉到（fetchMe 慢/失败），这里补一次，避免误判「不是你的」
+    let uid = myId;
+    if (!uid) {
+      const me = await fetchMe();
+      uid = me?.id ?? null;
+      setMyId(uid);
+    }
+    if (!uid || guide.user_id !== uid) {
+      setToast("只能删除自己的攻略");
+      return;
+    }
+
+    setBurningId(id);
+    try {
+      await deleteGuide(id);
+      // 让火焰动画播完再从列表里淡出
+      window.setTimeout(() => {
+        setGuides((prev) => prev.filter((g) => g.id !== id));
+        // 路线 / 时间轴也重新拉一遍，三处保持同一份真相
+        setDataVersion((v) => v + 1);
+        void load();
+        emitDataChanged({ kind: "guide", action: "deleted", id });
+        const linked = guide.route_id ? "；关联的路线还在路线 tab 里" : "";
+        setToast(`已删除《${guide.title}》${linked}`);
+      }, 260);
+    } catch {
+      setToast("删除失败，可能没有权限或网络断了");
+      setBurningId(null);
+    }
+  };
 
   const colorOf = useMemo(() => {
     const map = new Map<string, string>();
@@ -103,29 +194,6 @@ function TravelInner() {
           )
         : routes,
     [routes, destination],
-  );
-
-  const destinations = useMemo(() => {
-    const set = new Set<string>();
-    guides.forEach((g) => g.destination && set.add(g.destination));
-    routes.forEach((r) => r.points.forEach((p) => set.add(p.name)));
-    return Array.from(set).slice(0, 12);
-  }, [guides, routes]);
-
-  const ownerChip = (o: ExploreOwner) => (
-    <button
-      key={o.id}
-      onClick={() => setScope(`u:${o.id}`)}
-      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] transition-colors ${
-        scope === `u:${o.id}`
-          ? "text-slate-900"
-          : "bg-slate-500/10 text-slate-500 dark:text-slate-400 hover:bg-slate-500/20"
-      }`}
-      style={scope === `u:${o.id}` ? { background: colorOf.get(o.id) } : undefined}
-    >
-      <span className="w-2 h-2 rounded-full" style={{ background: colorOf.get(o.id) }} />
-      {o.nickname}
-    </button>
   );
 
   return (
@@ -162,42 +230,10 @@ function TravelInner() {
       </header>
 
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
-        {/* 谁的攻略 */}
+        {/* 筛选：只有搜索 + 只看我 / 好友 / 全世界 */}
         <div className="glass-card rounded-2xl border-white/40 dark:border-white/10 px-4 py-3 mb-4 space-y-2.5">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-[11px] text-slate-400 mr-1">看谁的：</span>
-            <button
-              onClick={() => setScope("all")}
-              className={`px-3 py-1.5 rounded-full text-[11px] transition-colors ${
-                scope === "all" ? "bg-emerald-500 text-white" : "bg-slate-500/10 text-slate-500 dark:text-slate-400"
-              }`}
-            >
-              大家
-            </button>
-            <button
-              onClick={() => setScope("me")}
-              className={`px-3 py-1.5 rounded-full text-[11px] transition-colors ${
-                scope === "me" ? "bg-emerald-500 text-white" : "bg-slate-500/10 text-slate-500 dark:text-slate-400"
-              }`}
-            >
-              只看我
-            </button>
-            <button
-              onClick={() => setScope("world")}
-              className={`px-3 py-1.5 rounded-full text-[11px] transition-colors ${
-                scope === "world"
-                  ? "bg-violet-500 text-white"
-                  : "bg-slate-500/10 text-slate-500 dark:text-slate-400"
-              }`}
-              title="包含陌生人公开分享的攻略与路线"
-            >
-              全世界
-            </button>
-            {owners.filter((o) => !o.is_me).map(ownerChip)}
-          </div>
-
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="relative flex-1 min-w-[200px]">
+            <span className="relative flex-1 min-w-[240px]">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
               <input
                 value={q}
@@ -216,20 +252,36 @@ function TravelInner() {
             )}
           </div>
 
-          {destinations.length > 0 && !destination && (
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-[11px] text-slate-400 mr-1">去哪：</span>
-              {destinations.map((d) => (
-                <button
-                  key={d}
-                  onClick={() => setDestination(d)}
-                  className="px-2.5 py-1 rounded-full text-[11px] bg-slate-500/10 text-slate-500 dark:text-slate-400 hover:bg-slate-500/20"
-                >
-                  {d}
-                </button>
-              ))}
-            </div>
-          )}
+          <div className="flex items-center gap-2 flex-wrap">
+            {(
+              [
+                ["me", "只看我"],
+                ["all", "好友"],
+                ["world", "全世界"],
+              ] as [string, string][]
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                onClick={() => setScope(value)}
+                className={`px-3 py-1.5 rounded-full text-[11px] transition-colors ${
+                  scope === value
+                    ? value === "world"
+                      ? "bg-violet-500 text-white"
+                      : "bg-emerald-500 text-white"
+                    : "bg-slate-500/10 text-slate-500 dark:text-slate-400"
+                }`}
+                title={
+                  value === "world"
+                    ? "包含陌生人公开分享的攻略与路线"
+                    : value === "all"
+                      ? "我和我的好友"
+                      : "只有我自己"
+                }
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* 攻略 / 路线 */}
@@ -270,73 +322,63 @@ function TravelInner() {
               action={{ href: "/travel/new", label: "写第一篇攻略" }}
             />
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-              {filteredGuides.map((g, i) => (
-                <motion.div
-                  key={g.id}
-                  initial={{ opacity: 0, y: 16 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: Math.min(i * 0.04, 0.3) }}
-                >
-                  <Link
-                    href={`/travel/${g.id}`}
-                    className="block rounded-2xl overflow-hidden glass-card border-white/40 dark:border-white/10 hover:border-emerald-400/50 transition-colors h-full"
+            // 攻略卡换成相纸：直接贴在深色页面上，不额外铺底板，免得突兀
+            <div className="grid grid-cols-1 gap-x-10 gap-y-14 sm:grid-cols-2 lg:grid-cols-3">
+                {filteredGuides.map((g, i) => (
+                  <motion.div
+                    key={g.id}
+                    initial={{ opacity: 0, y: 16 }}
+                    animate={{
+                      opacity: burningId === g.id ? 0 : draggingId === g.id ? 0.35 : 1,
+                      y: 0,
+                      scale: burningId === g.id ? 0.86 : 1,
+                    }}
+                    transition={{ delay: Math.min(i * 0.04, 0.3) }}
                   >
-                    <div className="relative aspect-[16/10] bg-slate-800">
-                      {g.cover ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img src={g.cover} alt="" className="w-full h-full object-cover" />
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center text-slate-500 text-xs">
-                          没有封面
-                        </div>
-                      )}
-                      <span className="absolute top-2 left-2 flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-950/70 text-[10px] text-slate-100">
-                        <span
-                          className="w-2 h-2 rounded-full"
-                          style={{ background: colorOf.get(g.user_id) ?? "#34d399" }}
+                    {/* 原生拖拽放在普通 div 上：motion.div 的 onDragStart 是它自己的手势。
+                        所有卡片都能拖（含别人的），拖到火焰里再判断能不能删——
+                        否则用户会以为「有的拖不动」是坏了。 */}
+                    <div
+                      draggable
+                      onDragStart={(event) => {
+                        event.dataTransfer.setData("text/plain", g.id);
+                        event.dataTransfer.effectAllowed = "move";
+                        setDraggingId(g.id);
+                      }}
+                      onDragEnd={() => {
+                        setDraggingId(null);
+                        setOverFlame(false);
+                      }}
+                      className="cursor-grab active:cursor-grabbing select-none"
+                      title={isMine(g) ? "拖到页面下方的蓝色火焰里可删除" : "别人的攻略拖不进去（只能删自己的）"}
+                    >
+                      <Link href={`/travel/${g.id}`}>
+                        <PolaroidCard
+                          cover={g.cover}
+                          title={g.title}
+                          date={cnDate(g.created_at)}
+                          badge={g.photo_count ? `${g.photo_count} 张` : `${g.day_count} 天`}
+                          index={i}
+                          layers={g.photo_count && g.photo_count > 2 ? 3 : 1}
+                          footnote={[g.destination, g.owner_name].filter(Boolean).join(" · ")}
+                          tone="dark"
                         />
-                        {g.owner_name ?? "某人"}
-                      </span>
-                      <span className="absolute top-2 right-2">
-                        <VisBadge visibility={g.visibility} />
-                      </span>
+                      </Link>
                     </div>
-                    <div className="p-4">
-                      <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100 line-clamp-1">
-                        {g.title}
-                      </h3>
-                      {g.subtitle && (
-                        <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400 line-clamp-1">
-                          {g.subtitle}
-                        </p>
-                      )}
-                      <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-slate-400">
-                        {g.destination && (
-                          <span className="flex items-center gap-1">
-                            <MapPin className="w-3 h-3" />
-                            {g.destination}
-                          </span>
-                        )}
-                        <span className="flex items-center gap-1">
-                          <CalendarDays className="w-3 h-3" />
-                          {g.day_count} 天
-                        </span>
-                        {g.budget && (
-                          <span className="flex items-center gap-1">
-                            <Wallet className="w-3 h-3" />
-                            {g.budget}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </Link>
-                </motion.div>
-              ))}
+                  </motion.div>
+                ))}
             </div>
           )
         ) : tab === "timeline" ? (
-          <TimelineClient />
+          <TimelineClient
+            refreshKey={dataVersion}
+            onChanged={() => {
+              // 时间轴里删了一条记忆：攻略/路线的引用可能失效，这边跟着刷新
+              setDataVersion((v) => v + 1);
+              void load();
+              setToast("已删除一条记忆，攻略与路线已同步刷新");
+            }}
+          />
         ) : filteredRoutes.length === 0 ? (
           <EmptyState
             text="还没有路线。把去过的地方按顺序连起来，地图上就有一条线。"
@@ -389,6 +431,26 @@ function TravelInner() {
           </div>
         )}
       </div>
+
+      {/* 拖拽删除：拖到正下方蓝色火焰松手就烧掉 */}
+      <FlameTrashZone
+        visible={Boolean(draggingId)}
+        active={overFlame}
+        denied={!canBurn}
+        onDragOver={() => setOverFlame(true)}
+        onDragLeave={() => setOverFlame(false)}
+        onDrop={(event) => {
+          event.preventDefault();
+          const id = event.dataTransfer.getData("text/plain") || draggingId;
+          if (id) void burnGuide(id);
+        }}
+      />
+
+      {toast && (
+        <div className="fixed left-1/2 -translate-x-1/2 bottom-28 z-[96] px-4 py-2 rounded-xl bg-slate-950/90 border border-cyan-400/30 text-[11px] text-cyan-50 shadow-lg">
+          {toast}
+        </div>
+      )}
     </div>
   );
 }

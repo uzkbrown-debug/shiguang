@@ -20,6 +20,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { fetchMemoryMedia, type MemoryMediaPage } from "@/app/api/shiguang";
+import { emitDataChanged } from "@/lib/dataBus";
 import StoryNarration from "@/components/shiguang/StoryNarration";
 import MemoryVideoPlayer from "@/components/shiguang/MemoryVideoPlayer";
 
@@ -61,30 +62,54 @@ export default function MemoryGalleryPage() {
   const [index, setIndex] = useState(0);
   const [zoomed, setZoomed] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [savingVis, setSavingVis] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     let alive = true;
-    setLoading(true);
-    Promise.all([
-      fetchMemoryMedia(params.id),
-      fetch(`/api/memories/${params.id}`, { cache: "no-store" })
-        .then((r) => (r.ok ? r.json() : null))
-        .catch(() => null),
-    ])
-      .then(([media, detail]) => {
-        if (!alive) return;
-        setData(media);
-        setFull(detail as MemoryFull | null);
-        setIndex(0);
-      })
-      .finally(() => {
-        if (alive) setLoading(false);
-      });
+    // 放到下一个 tick：避免在 effect 体里同步 setState（React 19 的规则）
+    const timer = setTimeout(() => {
+      setLoading(true);
+      Promise.all([
+        fetchMemoryMedia(params.id),
+        fetch(`/api/memories/${params.id}`, { cache: "no-store" })
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null),
+      ])
+        .then(([media, detail]) => {
+          if (!alive) return;
+          setData(media);
+          setFull(detail as MemoryFull | null);
+          setIndex(0);
+        })
+        .finally(() => {
+          if (alive) setLoading(false);
+        });
+    }, 0);
     return () => {
       alive = false;
+      clearTimeout(timer);
     };
   }, [params.id]);
+
+  /** 改可见性：仅自己 / 好友 / 公开，改完立刻生效 */
+  const changeVisibility = async (value: "private" | "friends" | "public") => {
+    if (!full || savingVis) return;
+    setSavingVis(value);
+    try {
+      const res = await fetch(`/api/memories/${params.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ visibility: value }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      setFull({ ...full, visibility: value });
+    } catch {
+      /* 失败就保持原样 */
+    } finally {
+      setSavingVis(null);
+    }
+  };
 
   const total = data?.photos.length ?? 0;
   const photos = data?.photos ?? [];
@@ -116,6 +141,8 @@ export default function MemoryGalleryPage() {
     try {
       const res = await fetch(`/api/memories/${data.memory_id}`, { method: "DELETE" });
       if (!res.ok) throw new Error(await res.text());
+      // 地图、时间轴、旅行页一起刷新
+      emitDataChanged({ kind: "memory", action: "deleted", id: data.memory_id });
       router.push("/timeline");
     } catch (e) {
       alert(`删除失败：${(e as Error).message}`);
@@ -229,8 +256,29 @@ export default function MemoryGalleryPage() {
               {total} 张
             </span>
             {full?.visibility && (
-              <span className="px-2 py-0.5 rounded-full bg-white/15">
-                {VIS_TEXT[full.visibility] ?? "好友可见"}
+              <span className="flex items-center gap-0.5 rounded-full bg-white/10 px-1 py-0.5">
+                {(["private", "friends", "public"] as const).map((v) => (
+                  <button
+                    key={v}
+                    type="button"
+                    onClick={() => void changeVisibility(v)}
+                    disabled={savingVis === v || full.visibility === v}
+                    title={
+                      v === "private"
+                        ? "只有我自己看得到"
+                        : v === "friends"
+                          ? "我和我的好友看得到"
+                          : "所有人都看得到"
+                    }
+                    className={`rounded-full px-2 py-0.5 text-[10.5px] transition-colors ${
+                      full.visibility === v
+                        ? "bg-white text-slate-900"
+                        : "text-slate-200 hover:bg-white/20"
+                    } disabled:opacity-70`}
+                  >
+                    {savingVis === v ? "…" : VIS_TEXT[v]}
+                  </button>
+                ))}
               </span>
             )}
             {costTotal > 0 && (

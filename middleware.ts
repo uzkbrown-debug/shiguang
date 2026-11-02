@@ -19,6 +19,12 @@ export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const auth = siteConfig.auth;
 
+  // 已下架的模块：旧博客（文章/项目/照片墙）+ 人物网络，直接回首页
+  const RETIRED = ["/posts", "/projects", "/photowall", "/people"];
+  if (RETIRED.some((p) => pathname === p || pathname.startsWith(`${p}/`))) {
+    return NextResponse.redirect(new URL("/", request.url));
+  }
+
   if (!auth?.enabled) return NextResponse.next();
 
   const cookie = request.cookies.get(auth.cookieName)?.value;

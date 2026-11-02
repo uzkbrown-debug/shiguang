@@ -136,11 +136,10 @@ def visible_owner_ids(db: Session, viewer: User | None, scope: str | None = "all
         everyone = db.scalars(select(User.id)).all()
         return sorted(set(everyone))
 
-    if scope in (None, "", "all"):
-        return mine + friends
     if scope == "me":
         return mine
-    if scope == "friends":
+    # 「好友」只看好友，不含自己：自己那份在「只看我」里
+    if scope in (None, "", "all", "friends"):
         return friends
     if scope.startswith("u:"):
         target = scope[2:]

@@ -6,7 +6,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, false, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from config import DATA_DIR, MEDIA_DIR
@@ -151,8 +151,30 @@ def list_locations(db: Session = Depends(get_db)):
 
 
 @app.get("/api/persons")
-def list_persons(db: Session = Depends(get_db)):
-    rows = db.scalars(select(Person)).all()
+def list_persons(
+    db: Session = Depends(get_db),
+    viewer: User | None = Depends(optional_user),
+):
+    """人物库只展示「出现在我能看到的记忆里」的人，未登录返回空"""
+    if viewer is None:
+        return []
+
+    visible_memory_ids = db.scalars(
+        select(Memory.id).where(Memory.user_id == viewer.id)
+    ).all()
+    if not visible_memory_ids:
+        return []
+
+    person_ids = {
+        link.person_id
+        for link in db.scalars(
+            select(MemoryPerson).where(MemoryPerson.memory_id.in_(visible_memory_ids))
+        )
+    }
+    if not person_ids:
+        return []
+
+    rows = db.scalars(select(Person).where(Person.id.in_(person_ids))).all()
     # 间接关系：这个人是通过谁认识的（王盈芳的闺蜜 → via 王盈芳）
     links = db.scalars(select(PersonRelation)).all()
     via_map: dict[str, dict] = {}
@@ -174,56 +196,9 @@ def list_persons(db: Session = Depends(get_db)):
     ]
 
 
-class PersonUpdate(BaseModel):
-    name: str | None = None
-    relation_label: str | None = None
-    avatar: str | None = None
-
-
-@app.patch("/api/persons/{person_id}")
-def update_person(person_id: str, payload: PersonUpdate, db: Session = Depends(get_db)):
-    """改人物资料：名字、关系、头像（头像不填就自动用 TA 第一张照片）"""
-    person = db.get(Person, person_id)
-    if not person:
-        raise HTTPException(404, "人物不存在")
-    if payload.name:
-        person.name = payload.name.strip()[:32]
-    if payload.relation_label is not None:
-        person.relation_label = payload.relation_label.strip()[:16] or None
-    if payload.avatar is not None:
-        person.avatar = payload.avatar or None
-    db.commit()
-
-    # 没头像就顺手补一张：拿 TA 参与的记忆的封面
-    if not person.avatar:
-        first = db.scalar(
-            select(Memory)
-            .join(MemoryPerson, MemoryPerson.memory_id == Memory.id)
-            .where(MemoryPerson.person_id == person_id, Memory.cover.isnot(None))
-            .order_by(Memory.happened_at)
-        )
-        if first and first.cover:
-            person.avatar = first.cover
-            db.commit()
-
-    return {"id": person.id, "name": person.name, "relation_label": person.relation_label, "avatar": person.avatar}
-
-
-@app.delete("/api/persons/{person_id}")
-def delete_person(person_id: str, db: Session = Depends(get_db)):
-    """删掉一个人物（同时解除 TA 与所有记忆的关联、以及与其他人的关系）"""
-    person = db.get(Person, person_id)
-    if not person:
-        raise HTTPException(404, "人物不存在")
-    db.execute(delete(MemoryPerson).where(MemoryPerson.person_id == person_id))
-    db.execute(
-        delete(PersonRelation).where(
-            (PersonRelation.from_person_id == person_id) | (PersonRelation.to_person_id == person_id)
-        )
-    )
-    db.delete(person)
-    db.commit()
-    return {"deleted": person_id}
+# 人物资料编辑/删除接口已随「人物网络」模块下线：
+# 它们在删除页面的同时没有归属校验，等于允许任何人改/删全站人物数据。
+# 人物信息现在只由记忆本身（memory_persons）推导，前端只读。
 
 
 # ---------- 记忆 ----------
@@ -246,11 +221,15 @@ def list_memories(
     if viewer:
         if owner:
             allowed = [owner] if (owner == viewer.id or are_friends(db, viewer.id, owner)) else []
+            stmt = stmt.where(Memory.user_id.in_(allowed) if allowed else false())
+        elif scope in ("world", "everyone", "discover"):
+            # 世界档：只放公开内容，自己的私密 / 好友可见不出现
+            stmt = stmt.where(Memory.visibility == "public")
         elif scope in ("me", "friends", "all"):
             allowed = visible_owner_ids(db, viewer, scope)
+            stmt = stmt.where(Memory.user_id.in_(allowed) if allowed else false())
         else:
-            allowed = [viewer.id]
-        stmt = stmt.where(Memory.user_id.in_(allowed) if allowed else Memory.visibility == "public")
+            stmt = stmt.where(Memory.user_id == viewer.id)
     else:
         stmt = stmt.where(Memory.visibility == "public")
 
@@ -268,19 +247,47 @@ def list_memories(
             Memory.title.like(like) | Memory.summary.like(like) | Memory.content.like(like)
         )
 
+    # 刚上传、还没分析过的（pending）只是草稿：不该出现在最近记忆 / 时间轴 / 相册里，
+    # 它们只在「待分析」页里出现
+    stmt = stmt.where(
+        or_(Memory.ai_status.is_(None), Memory.ai_status.notin_(["pending", "draft"]))
+    )
+
     stmt = stmt.order_by(Memory.happened_at.desc()).limit(limit).offset(offset)
     rows = [m for m in db.scalars(stmt).unique() if can_view(db, viewer, m.user_id, getattr(m, "visibility", None))]
-    return [memory_brief(m) for m in rows]
+    items = [memory_brief(m) for m in rows]
+
+    # 没设封面的记忆，用它的第一张照片当封面：相册/卡片不该因为「没设过封面」就空着
+    need = [it["id"] for it in items if not it.get("cover")]
+    if need:
+        first_photo: dict[str, str] = {}
+        for row in db.scalars(
+            select(MemoryMedia)
+            .where(MemoryMedia.memory_id.in_(need))
+            .order_by(MemoryMedia.memory_id, MemoryMedia.sort)
+        ):
+            first_photo.setdefault(row.memory_id, row.url)
+        for it in items:
+            if not it.get("cover"):
+                it["cover"] = first_photo.get(it["id"])
+    return items
 
 
 @app.get("/api/memories/{memory_id}")
-def get_memory(memory_id: str, db: Session = Depends(get_db)):
+def get_memory(
+    memory_id: str,
+    db: Session = Depends(get_db),
+    viewer: User | None = Depends(optional_user),
+):
     memory = db.scalar(
         select(Memory)
         .options(selectinload(Memory.person_links), selectinload(Memory.media))
         .where(Memory.id == memory_id)
     )
     if not memory:
+        raise HTTPException(404, "记忆不存在")
+    # 私密/好友可见的记忆不能靠猜 id 直接读
+    if not can_view(db, viewer, memory.user_id, getattr(memory, "visibility", None)):
         raise HTTPException(404, "记忆不存在")
 
     data = memory_brief(memory)
@@ -303,10 +310,16 @@ def get_memory(memory_id: str, db: Session = Depends(get_db)):
 
 
 @app.get("/api/memories/{memory_id}/media")
-def get_memory_media(memory_id: str, db: Session = Depends(get_db)):
+def get_memory_media(
+    memory_id: str,
+    db: Session = Depends(get_db),
+    viewer: User | None = Depends(optional_user),
+):
     """记忆下的所有图片，用于时间线的图片展示页"""
     memory = db.get(Memory, memory_id)
     if not memory:
+        raise HTTPException(404, "记忆不存在")
+    if not can_view(db, viewer, memory.user_id, getattr(memory, "visibility", None)):
         raise HTTPException(404, "记忆不存在")
     rows = db.scalars(
         select(MemoryMedia).where(MemoryMedia.memory_id == memory_id).order_by(MemoryMedia.sort)
@@ -334,24 +347,36 @@ def get_memory_media(memory_id: str, db: Session = Depends(get_db)):
 
 
 @app.get("/api/timeline/years")
-def timeline_years(db: Session = Depends(get_db)):
-    """按年份聚合，前端时间线使用"""
-    rows = db.execute(
-        select(
-            func.substr(Memory.happened_at, 1, 4).label("year"),
-            func.count().label("count"),
-        )
-        .group_by("year")
-        .order_by("year")
-    ).all()
+def timeline_years(
+    db: Session = Depends(get_db),
+    viewer: User | None = Depends(optional_user),
+):
+    """按年份聚合，前端时间线使用（只统计当前用户自己能看到的记忆）"""
+    stmt = select(
+        func.substr(Memory.happened_at, 1, 4).label("year"),
+        func.count().label("count"),
+    )
+    if viewer:
+        stmt = stmt.where(Memory.user_id == viewer.id)
+    else:
+        stmt = stmt.where(Memory.visibility == "public")
+    rows = db.execute(stmt.group_by("year").order_by("year")).all()
     return [{"year": int(r.year), "count": r.count} for r in rows if r.year]
 
 
 # ---------- 故事 ----------
 
 @app.get("/api/stories")
-def list_stories(db: Session = Depends(get_db)):
-    rows = db.scalars(select(Story).order_by(Story.created_at.desc())).all()
+def list_stories(
+    db: Session = Depends(get_db),
+    viewer: User | None = Depends(optional_user),
+):
+    """只列出「我自己」生成的故事；历史演示故事（user_id 为空）不展示给任何人"""
+    if viewer is None:
+        return []
+    rows = db.scalars(
+        select(Story).where(Story.user_id == viewer.id).order_by(Story.created_at.desc())
+    ).all()
     return [
         {
             "id": s.id,
@@ -367,11 +392,17 @@ def list_stories(db: Session = Depends(get_db)):
 
 
 @app.get("/api/stories/{story_id}")
-def get_story(story_id: str, db: Session = Depends(get_db)):
+def get_story(
+    story_id: str,
+    db: Session = Depends(get_db),
+    viewer: User | None = Depends(optional_user),
+):
     story = db.scalar(
         select(Story).options(selectinload(Story.scenes)).where(Story.id == story_id)
     )
     if not story:
+        raise HTTPException(404, "故事不存在")
+    if viewer is None or story.user_id != viewer.id:
         raise HTTPException(404, "故事不存在")
     return {
         "id": story.id,

@@ -25,9 +25,87 @@ export interface AssistantAction {
   params: Record<string, string>;
 }
 
+/** 「谁也去过」的人卡：优先给能点开的攻略，没有攻略就退到记忆 */
+export interface PlaceOther {
+  userId: string;
+  name: string;
+  avatar?: string | null;
+  count: number;
+  lastVisit?: string | null;
+  memoryId?: string | null;
+  title?: string | null;
+  cover?: string | null;
+  guideId?: string | null;
+  guideTitle?: string | null;
+}
+
+/** 某个地方的核查结果：我去过没、去过几次、谁去过 */
+/** 「你去过」的依据：命中的那几条记忆 */
+export interface PlaceEvidence {
+  id: string;
+  title: string;
+  date?: string | null;
+  place?: string | null;
+}
+
+export interface PlaceCheck {
+  place: string;
+  city: string;
+  locationId: string;
+  /** city = 问的是城市（厦门），place = 问的是具体地点（鼓浪屿） */
+  level?: "city" | "place";
+  visited: boolean;
+  visitCount: number;
+  cityVisitCount?: number;
+  firstVisit?: string | null;
+  lastVisit?: string | null;
+  checkIn?: "visited" | "wish" | null;
+  wish?: boolean;
+  memoryIds?: string[];
+  /** 「你去过」到底依据哪几条记忆（最多 3 条） */
+  evidence?: PlaceEvidence[];
+  /** 这个地点在地图上的入口 /map?q=… */
+  mapHref?: string;
+  others: PlaceOther[];
+  /** 同地点存在、但因为可见范围看不到的人数（只计数不露名字） */
+  hiddenOthers?: number;
+}
+
+/** 我去过的一个地方（按城市聚合） */
+export interface MyPlace {
+  city: string;
+  name: string;
+  locationId: string;
+  count: number;
+  first?: string | null;
+  last?: string | null;
+}
+
+/** 证据记忆的展示信息（后端给，前端不再依赖本地演示数据） */
+export interface EvidenceCard {
+  id: string;
+  title: string;
+  date?: string | null;
+  cover?: string | null;
+  place?: string | null;
+  /** 同行的人（不含「我」） */
+  people?: string[];
+  tags?: string[];
+  emotion?: string | null;
+  guideId?: string | null;
+}
+
 export interface AssistantAnswer {
   answer: string;
   evidenceMemoryIds: string[];
+  /** 证据记忆 → 旅行攻略 id：点证据方块直接传送到 /travel/{id}，不在里面的退到记忆详情页 */
+  evidenceGuideIds?: Record<string, string>;
+  /** 后端算好的证据展示信息；没有就退回本地数据 */
+  evidenceCards?: EvidenceCard[] | null;
+  /** 问题点到某个地方时：我去过没 / 谁去过 */
+  placeCheck?: PlaceCheck | null;
+  /** 问「我去过哪些地方」时：按城市聚合的足迹 */
+  places?: MyPlace[] | null;
   action?: AssistantAction;
   uncertainty?: string;
 }
@@ -465,6 +543,7 @@ export function buildYearNarrative(year: number, source: ShiguangMemory[] = memo
 
 const QUESTION_SAMPLES = [
   "我第一次去厦门是什么时候？",
+  "我去过拉萨吗？",
   "帮我找大学期间和小林有关的事情",
   "2024 年我去过哪些城市？",
   "把我和父亲的共同回忆整理成一个故事",

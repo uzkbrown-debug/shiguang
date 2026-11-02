@@ -17,6 +17,9 @@ export interface MeUser {
     guide_count: number;
     city_count: number;
     cities: string[];
+    photo_count?: number;
+    person_count?: number;
+    year_span?: number;
   };
   friend_count?: number;
   pending_requests?: number;
@@ -90,4 +93,14 @@ export async function patchMe(body: Partial<Pick<MeUser, "nickname" | "bio" | "a
   });
   if (!res.ok) throw new Error("保存失败");
   return (await res.json()) as MeUser;
+}
+
+/** 上传头像（需要已登录）；返回更新后的用户 */
+export async function uploadAvatar(file: File): Promise<MeUser> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch("/api/auth/avatar", { method: "POST", body: form });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data as { detail?: string }).detail || "头像上传失败");
+  return data as MeUser;
 }

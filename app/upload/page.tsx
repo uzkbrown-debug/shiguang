@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
+import { emitDataChanged } from "@/lib/dataBus";
 import {
   Upload,
   Sparkles,
@@ -13,6 +14,7 @@ import {
   AlertCircle,
   Images,
   Film,
+  Loader2,
   Route as RouteIcon,
 } from "lucide-react";
 
@@ -64,17 +66,19 @@ const VIS_OPTIONS: [string, string][] = [
   ["public", "公开"],
 ];
 
-type DayMeta = { title: string; transport: string; cost: string; content: string };
-const EMPTY_DAY: DayMeta = { title: "", transport: "", cost: "", content: "" };
-
-/** AI 只给了一整段时，按句子摊到每一天，免得第 2、3 天全空着 */
-const distribute = (text: string, dayCount: number): string[] => {
-  const parts = text.split(/(?<=。)/).map((x) => x.trim()).filter(Boolean);
-  const n = Math.max(1, dayCount);
-  if (!parts.length) return Array.from({ length: n }, () => "");
-  const per = Math.ceil(parts.length / n);
-  return Array.from({ length: n }, (_, i) => parts.slice(i * per, (i + 1) * per).join(""));
+type DayMeta = {
+  title: string;
+  notes: string;
+  transport: string;
+  cost: string;
+  content: string;
+  /** 这段正文是照着哪几张图写的；照片一变就和当前分组对不上，界面立刻提示重写 */
+  srcKey?: string;
 };
+const EMPTY_DAY: DayMeta = { title: "", notes: "", transport: "", cost: "", content: "", srcKey: "" };
+
+/** 一天的图片指纹：用于判断正文是不是过期了 */
+const keyOf = (urls: string[]) => urls.filter(Boolean).join("|");
 
 /** 正文自动撑高：不再被 rows=3 裁掉半行 */
 function AutoTextarea({
@@ -110,7 +114,8 @@ export default function UploadPage() {
   const inputRef = useRef<HTMLInputElement>(null);
 
   const [stage, setStage] = useState<Stage>("idle");
-  const [visibility, setVisibility] = useState("friends");
+  // 默认「仅自己」：上传的记忆不该默认就给别人看
+  const [visibility, setVisibility] = useState("private");
   const [dragging, setDragging] = useState(false);
   const [progress, setProgress] = useState(0);
   const [steps, setSteps] = useState<StepInfo[]>([]);
@@ -129,9 +134,11 @@ export default function UploadPage() {
   const [dayOf, setDayOf] = useState<Record<string, number>>({});
   const [dayCount, setDayCount] = useState(1);
   const [dayMeta, setDayMeta] = useState<Record<number, DayMeta>>({});
-
-  /** 整篇原文兜底：哪天 AI 没写出来，就从这里摊给它 */
-  const fallbackRef = useRef("");
+  /** 拖动时高亮目标天：不然照片飞过去没反馈，看着很笨 */
+  const [dropDay, setDropDay] = useState<number | null>(null);
+  const [dropNew, setDropNew] = useState(false);
+  /** 哪天没写出来、原因是什么：宁可空着也不拿别的内容充数 */
+  const [dayFails, setDayFails] = useState<Record<number, string>>({});
 
   const imageMedia = media.filter((m) => m.kind === "image");
   const videoMedia = media.filter((m) => m.kind === "video");
@@ -215,10 +222,6 @@ export default function UploadPage() {
       setDraft(d);
       setLocationText(d.location_id ? (d.place ?? "") : "");
       // 整篇原文留一份兜底，不再拆词也不清空用户的分天
-      fallbackRef.current = (d.content ?? d.summary ?? "")
-        .split("\n")
-        .filter((l) => l.trim() && !/^(先说数|我的走法)/.test(l.trim()))
-        .join("");
 
       // 用户拖好的分天原样保留；只有真的没分过才兜底成一天
       if (!dayCount || dayCount < 1) {
@@ -240,51 +243,131 @@ export default function UploadPage() {
     }
   };
 
-  /** 拖完照片点这个：让 AI 按你分的天，各看各的照片，各写一段 */
+  /** 拖完照片点这个：让 AI 按你分的天，各看各的照片，各写一段
+   *  每天单独发一个请求：某天失败只影响那天，绝不连坐，也不拿别天的字顶上 */
   const [redoing, setRedoing] = useState(false);
   const redoDays = async (silent = false) => {
     if (!draft) return;
     if (!silent) setRedoing(true);
-    const spare = distribute(fallbackRef.current, dayCount);
-    try {
-      const groups = Array.from({ length: dayCount }, (_, i) => i + 1).map((n) => ({
-        urls: media.filter((m) => (dayOf[m.url] ?? 1) === n).map((m) => m.url),
-      }));
-      const res = await fetch(`/api/memories/${draft.memory_id}/analyze-days`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ days: groups }),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
-      const list: { title?: string; content?: string; transport?: string; costs?: CostItem[] }[] =
-        data.days ?? [];
-      setDayMeta(() => {
-        const next: Record<number, DayMeta> = {};
-        for (let n = 1; n <= dayCount; n++) {
-          const d = list[n - 1] ?? {};
+    setError("");
+    const groups = Array.from({ length: dayCount }, (_, i) => i + 1).map((n) => ({
+      urls: media.filter((m) => (dayOf[m.url] ?? 1) === n).map((m) => m.url),
+      // 把用户在分天这一步写的主题/关键信息一起发过去：模型按这个写，而不是自己猜
+      title: (dayMeta[n]?.title ?? "").trim(),
+      notes: (dayMeta[n]?.notes ?? "").trim(),
+    }));
+
+    const fails: Record<number, string> = {};
+    const results: Record<number, { title: string; transport: string; cost: string; content: string; srcKey: string }> =
+      {};
+
+    await Promise.all(
+      groups.map(async (group, i) => {
+        const n = i + 1;
+        try {
+          const res = await fetch(`/api/memories/${draft.memory_id}/analyze-days`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ days: [group] }),
+          });
+          if (!res.ok) throw new Error((await res.text()).slice(0, 120));
+          const d = ((await res.json()).days ?? [])[0] ?? {};
+          if (d.error) throw new Error(String(d.error));
+          const content = (d.content ?? "").trim();
+          if (!content) throw new Error("模型没有返回正文");
           const amount = (d.costs ?? [])
-            .map((c) => `${c.label ?? ""}${c.amount != null ? ` ${c.amount}` : ""}`.trim())
+            .map((c: CostItem) => `${c.label ?? ""}${c.amount != null ? ` ${c.amount}` : ""}`.trim())
             .filter(Boolean)
             .join(" · ");
-          next[n] = {
+          results[n] = {
             title: (d.title ?? "").trim(),
             transport: (d.transport ?? "").trim(),
             cost: amount,
-            content: (d.content ?? "").trim() || spare[n - 1] || "",
+            content,
+            srcKey: keyOf(d.urls ?? group.urls),
           };
+        } catch (e) {
+          fails[n] = `${(e as Error).message}`.replace(/^\{.*"detail":"?/, "").slice(0, 80);
         }
+      }),
+    );
+
+    setDayMeta((prev) => {
+      const next = { ...prev };
+      for (let n = 1; n <= dayCount; n++) {
+        const r = results[n];
+        if (!r) continue; // 没写出来的天保持原样，不清空
+        next[n] = {
+          // 用户写的主题优先，模型不改标题
+          title: r.title || (prev[n]?.title ?? "").trim(),
+          notes: prev[n]?.notes ?? "",
+          transport: r.transport,
+          cost: r.cost,
+          content: r.content,
+          srcKey: r.srcKey,
+        };
+      }
+      return next;
+    });
+    setDayFails(fails);
+    if (!silent) setRedoing(false);
+  };
+
+  /** 只重写某一天：把这一天的标题当主题发过去，其它天不动 */
+  const [redoingDay, setRedoingDay] = useState<number | null>(null);
+  /** 正文生成完之后，照片分配就锁住：改了照片但正文不重写，内容一定对不上
+   *  「分析中」也必须锁：那几十秒里一改分组，回来的正文就对不上照片了 */
+  const splitLocked =
+    stage === "analyzing" || stage === "confirm" || stage === "saving" || stage === "done";
+
+  const redoOneDay = async (n: number) => {
+    if (!draft || redoingDay) return;
+    setRedoingDay(n);
+    setError("");
+    try {
+      const group = {
+        urls: media.filter((m) => (dayOf[m.url] ?? 1) === n).map((m) => m.url),
+        title: (dayMeta[n]?.title ?? "").trim(),
+        notes: (dayMeta[n]?.notes ?? "").trim(),
+      };
+      const res = await fetch(`/api/memories/${draft.memory_id}/analyze-days`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ days: [group] }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      const d = (data.days ?? [])[0] ?? {};
+      if (d.error) throw new Error(d.error);
+      const amount = (d.costs ?? [])
+        .map((c: { label?: string; amount?: number }) =>
+          `${c.label ?? ""}${c.amount != null ? ` ${c.amount}` : ""}`.trim(),
+        )
+        .filter(Boolean)
+        .join(" · ");
+      setDayFails((prev) => {
+        const next = { ...prev };
+        delete next[n];
         return next;
       });
+      setDayMeta((prev) => ({
+        ...prev,
+        // 标题保留用户写的，只替换正文/交通/花费
+        [n]: {
+          title: prev[n]?.title ?? "",
+          notes: prev[n]?.notes ?? "",
+          transport: (d.transport ?? "").trim() || prev[n]?.transport || "",
+          cost: amount || prev[n]?.cost || "",
+          content: (d.content ?? "").trim() || prev[n]?.content || "",
+          srcKey: keyOf(d.urls ?? group.urls),
+        },
+      }));
     } catch (e) {
-      setError(`按天分析失败：${(e as Error).message}`);
-      setDayMeta(() => {
-        const next: Record<number, DayMeta> = {};
-        for (let n = 1; n <= dayCount; n++) next[n] = { ...EMPTY_DAY, content: spare[n - 1] ?? "" };
-        return next;
-      });
+      const msg = `${(e as Error).message}`.slice(0, 80);
+      setError(`第 ${n} 天重写失败：${msg}`);
+      setDayFails((prev) => ({ ...prev, [n]: msg }));
     } finally {
-      if (!silent) setRedoing(false);
+      setRedoingDay(null);
     }
   };
 
@@ -344,6 +427,9 @@ export default function UploadPage() {
       const info = await made.json();
       setGuideId(info.guide_id);
       setStage("done");
+      // 新记忆 + 新攻略入库：地图、时间轴、旅行页都要刷出来
+      emitDataChanged({ kind: "memory", action: "created", id: draft.memory_id });
+      emitDataChanged({ kind: "guide", action: "created", id: info.guide_id });
     } catch (e) {
       setError(`保存失败：${(e as Error).message}`);
       setStage("confirm");
@@ -361,10 +447,10 @@ export default function UploadPage() {
     setError("");
     setPickedCount(0);
     setLocationText("");
-    fallbackRef.current = "";
     setDayOf({});
     setDayCount(1);
     setDayMeta({});
+    setDayFails({});
   };
 
   const stepLabels = ["上传", "看照片", "写几行", "写成攻略"];
@@ -635,9 +721,14 @@ export default function UploadPage() {
                   </span>
                 </div>
                 <div className="flex flex-wrap items-center gap-2 mb-3">
-                  <p className="text-[11px] text-slate-400">
-                    把照片拖到第几天里（手机上点照片角标切换）—— 分几天，这篇攻略就是几天。
-                  </p>
+                  <div className="flex items-start gap-2 px-3 py-2 rounded-xl bg-emerald-500/10 border border-emerald-500/25">
+                    <Sparkles className="w-3.5 h-3.5 text-emerald-500 mt-0.5 shrink-0" />
+                    <p className="text-[11px] leading-relaxed text-emerald-700 dark:text-emerald-300">
+                      {splitLocked
+                        ? "照片分配已锁定：要换照片，点右上角「按这些照片重写每天」，正文会跟着重写。"
+                        : "把照片拖到对应的天（点一下也能换到下一个天）；拖到最右边的「＋ 加一天」＝给这张图开新的一天。再给每天写一句主题，AI 会照着这些写，不会自己编。"}
+                    </p>
+                  </div>
                   <button
                     type="button"
                     onClick={() => redoDays()}
@@ -661,13 +752,27 @@ export default function UploadPage() {
                     return (
                       <div
                         key={n}
-                        onDragOver={(e) => e.preventDefault()}
+                        onDragOver={(e) => {
+                          if (splitLocked) return;
+                          e.preventDefault();
+                          if (dropDay !== n) setDropDay(n);
+                        }}
+                        onDragLeave={(e) => {
+                          if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+                          setDropDay((cur) => (cur === n ? null : cur));
+                        }}
                         onDrop={(e) => {
+                          setDropDay(null);
+                          if (splitLocked) return;
                           e.preventDefault();
                           const url = e.dataTransfer.getData("text/plain");
                           if (url) setDayOf((d) => ({ ...d, [url]: n }));
                         }}
-                        className="w-[168px] shrink-0 rounded-xl border border-white/40 dark:border-white/10 bg-white/30 dark:bg-white/5 p-2"
+                        className={`w-[210px] shrink-0 rounded-xl border p-2 transition-colors ${
+                          dropDay === n && !splitLocked
+                            ? "border-emerald-400/80 bg-emerald-500/10 ring-2 ring-emerald-400/40"
+                            : "border-white/40 dark:border-white/10 bg-white/30 dark:bg-white/5"
+                        }`}
                       >
                         <div className="flex items-center gap-1.5 mb-1.5">
                           <span className="w-4 h-4 rounded-full bg-emerald-500/20 text-emerald-600 dark:text-emerald-300 text-[9px] grid place-items-center">
@@ -676,39 +781,111 @@ export default function UploadPage() {
                           <span className="text-[10.5px] text-slate-500 dark:text-slate-300">第 {n} 天</span>
                           <span className="ml-auto text-[9.5px] text-slate-400">{urls.length} 张</span>
                         </div>
-                        <div className="grid grid-cols-3 gap-1">
-                          {urls.map((m) => (
-                            <span
-                              key={m.url}
-                              draggable
-                              onDragStart={(e) => e.dataTransfer.setData("text/plain", m.url)}
-                              onClick={() =>
-                                setDayOf((d) => ({ ...d, [m.url]: (n % dayCount) + 1 }))
-                              }
-                              className="relative block aspect-square rounded-md overflow-hidden border border-white/20 cursor-grab"
-                              title="拖走，或点一下换到下一天"
-                            >
-                              {m.kind === "video" ? (
-                                <span className="w-full h-full grid place-items-center bg-slate-700/50 text-[9px] text-slate-300">
-                                  视频
-                                </span>
-                              ) : (
-                                // eslint-disable-next-line @next/next/no-img-element
-                                <img src={m.url} alt="" className="w-full h-full object-cover" />
-                              )}
-                            </span>
-                          ))}
+                        {/* 先写主题和关键信息：AI 后面就按这个写，不会乱编 */}
+                        <label className="mt-2 block">
+                          <span className="flex items-center gap-1 text-[10px] font-medium text-slate-500 dark:text-slate-400">
+                            <span className="w-1 h-1 rounded-full bg-emerald-500" />
+                            这天的主题
+                          </span>
+                          <input
+                            value={dayMeta[n]?.title ?? ""}
+                            onChange={(e) =>
+                              setDayMeta((m) => ({ ...m, [n]: { ...(m[n] ?? EMPTY_DAY), title: e.target.value } }))
+                            }
+                            placeholder="例：坐飞机去北京见学姐"
+                            className="mt-1 w-full px-2 py-1.5 rounded-lg bg-white/70 dark:bg-slate-900/50 border border-emerald-500/30 focus:border-emerald-500/70 text-[11px] font-medium text-slate-800 dark:text-slate-100 outline-none transition-colors placeholder:font-normal placeholder:text-slate-400/70"
+                          />
+                        </label>
+                        {!(dayMeta[n]?.title ?? "").trim() && (
+                          <p className="mt-1 text-[9.5px] text-amber-600 dark:text-amber-400">
+                            不填的话，AI 只会照着照片描述
+                          </p>
+                        )}
+                        <label className="mt-1.5 block">
+                          <span className="text-[10px] text-slate-500 dark:text-slate-400">
+                            关键信息<span className="text-slate-400/70">（可不填）</span>
+                          </span>
+                          <input
+                            value={dayMeta[n]?.notes ?? ""}
+                            onChange={(e) =>
+                              setDayMeta((m) => ({ ...m, [n]: { ...(m[n] ?? EMPTY_DAY), notes: e.target.value } }))
+                            }
+                            placeholder="航班 / 和谁 / 吃了什么"
+                            className="mt-1 w-full px-2 py-1.5 rounded-lg bg-white/70 dark:bg-slate-900/50 border border-slate-400/25 focus:border-emerald-500/60 text-[11px] text-slate-700 dark:text-slate-200 outline-none transition-colors placeholder:text-slate-400/70"
+                          />
+                        </label>
+                        {urls.length === 0 && !splitLocked && (
+                          <p className="mt-1.5 rounded-lg border border-dashed border-emerald-400/40 py-3 text-center text-[9.5px] text-emerald-600/80 dark:text-emerald-300/80">
+                            把照片拖到这里
+                          </p>
+                        )}
+                        <div className="grid grid-cols-3 gap-1 mt-1.5">
+                          {urls.map((m) => {
+                            const idx = media.findIndex((x) => x.url === m.url) + 1;
+                            return (
+                              <span
+                                key={m.url}
+                                draggable={!splitLocked}
+                                onDragStart={(e) => {
+                                  if (splitLocked) return;
+                                  e.dataTransfer.setData("text/plain", m.url);
+                                }}
+                                onClick={() => {
+                                  if (splitLocked) return;
+                                  setDayOf((d) => ({ ...d, [m.url]: (n % dayCount) + 1 }));
+                                }}
+                                className={`relative block aspect-square rounded-md overflow-hidden border border-white/20 ${
+                                  splitLocked ? "cursor-default" : "cursor-grab"
+                                }`}
+                                title={
+                                  splitLocked
+                                    ? `第 ${n} 天 · ${idx > 0 ? `你上传的第 ${idx} 张 · ` : ""}照片已锁定`
+                                    : `第 ${n} 天 · ${idx > 0 ? `你上传的第 ${idx} 张 · ` : ""}拖走或点一下换天`
+                                }
+                              >
+                                {m.kind === "video" ? (
+                                  <span className="w-full h-full grid place-items-center bg-slate-700/50 text-[9px] text-slate-300">
+                                    视频
+                                  </span>
+                                ) : (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img src={m.url} alt="" className="w-full h-full object-cover" />
+                                )}
+                              </span>
+                            );
+                          })}
                         </div>
                       </div>
                     );
                   })}
-                  <button
-                    type="button"
-                    onClick={() => setDayCount((c) => c + 1)}
-                    className="w-[92px] shrink-0 rounded-xl border border-dashed border-slate-400/40 text-[10.5px] text-slate-400 hover:text-emerald-500"
-                  >
-                    ＋ 加一天
-                  </button>
+                  {!splitLocked && (
+                    <button
+                      type="button"
+                      onClick={() => setDayCount((c) => c + 1)}
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        if (!dropNew) setDropNew(true);
+                      }}
+                      onDragLeave={() => setDropNew(false)}
+                      onDrop={(e) => {
+                        setDropNew(false);
+                        e.preventDefault();
+                        const url = e.dataTransfer.getData("text/plain");
+                        if (!url) return;
+                        // 拖到这儿就是「给这张图开新的一天」
+                        const nextDay = dayCount + 1;
+                        setDayCount(nextDay);
+                        setDayOf((d) => ({ ...d, [url]: nextDay }));
+                      }}
+                      className={`w-[92px] shrink-0 rounded-xl border border-dashed text-[10.5px] transition-colors ${
+                        dropNew
+                          ? "border-emerald-400 bg-emerald-500/15 text-emerald-500 ring-2 ring-emerald-400/40"
+                          : "border-slate-400/40 text-slate-400 hover:text-emerald-500"
+                      }`}
+                    >
+                      {dropNew ? "放开＝新的一天" : "＋ 加一天"}
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -734,19 +911,22 @@ export default function UploadPage() {
                         className="flex-1 min-w-0 bg-transparent text-base md:text-lg font-bold text-slate-800 dark:text-slate-100 outline-none placeholder:font-normal placeholder:text-slate-400"
                         style={{ fontFamily: "'Noto Serif SC', serif" }}
                       />
-                      <span className="flex items-center gap-1 shrink-0">
-                        {urls.slice(0, 4).map((m) => (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            key={m.url}
-                            src={m.url}
-                            alt=""
-                            className="w-10 h-8 rounded object-cover border border-white/25"
-                          />
-                        ))}
-                        {urls.length > 4 && (
-                          <span className="text-[10px] text-slate-400">+{urls.length - 4}</span>
+                      <button
+                        type="button"
+                        onClick={() => void redoOneDay(n)}
+                        disabled={redoingDay === n}
+                        title="按你写的标题重写这一天（其它天不动）"
+                        className="shrink-0 flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-500/10 text-[10px] text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 disabled:opacity-50 transition-colors"
+                      >
+                        {redoingDay === n ? (
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <RefreshCw className="w-3 h-3" />
                         )}
+                        {redoingDay === n ? "重写中" : "按标题重写"}
+                      </button>
+                      <span className="shrink-0 text-[10px] text-slate-400">
+                        {urls.length} 张图
                       </span>
                     </div>
 
@@ -773,12 +953,45 @@ export default function UploadPage() {
                       <span className="ml-auto text-[10.5px] text-slate-400">{urls.length} 张</span>
                     </div>
 
-                    {/* 正文：自动撑高，写多长都摊开 */}
-                    <AutoTextarea
-                      value={meta.content}
-                      onChange={(v) => patch({ content: v })}
-                      placeholder="这天发生了什么 —— AI 已经写了初稿，直接改"
-                    />
+                    {/* 图和文贴在同一块：这段字到底是照着哪张图写的，一眼就能核对 */}
+                    <div className="mt-3 flex gap-3 items-start">
+                      <div className="shrink-0 flex flex-col gap-1">
+                        {urls.slice(0, 2).map((m) => (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            key={m.url}
+                            src={m.url}
+                            alt=""
+                            className="w-[76px] h-[76px] rounded-lg object-cover border border-white/30 dark:border-white/10"
+                          />
+                        ))}
+                        {urls.length > 2 && (
+                          <span className="w-[76px] text-center text-[9.5px] text-slate-400">
+                            +{urls.length - 2} 张
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        {dayFails[n] && (
+                          <p className="mb-1 flex items-start gap-1 text-[10px] leading-relaxed text-rose-500">
+                            <AlertCircle className="w-3 h-3 shrink-0 mt-0.5" />
+                            这天没写出来：{dayFails[n]}
+                          </p>
+                        )}
+                        {meta.srcKey && keyOf(urls.map((m) => m.url)) !== meta.srcKey && (
+                          <p className="mb-1 flex items-center gap-1 text-[10px] text-amber-600 dark:text-amber-400">
+                            <AlertCircle className="w-3 h-3 shrink-0" />
+                            照片换过了，这段字还是按老照片写的 —— 点上面「按标题重写」
+                          </p>
+                        )}
+                        {/* 正文：自动撑高，写多长都摊开 */}
+                        <AutoTextarea
+                          value={meta.content}
+                          onChange={(v) => patch({ content: v })}
+                          placeholder="这天发生了什么 —— AI 已经写了初稿，直接改"
+                        />
+                      </div>
+                    </div>
                   </div>
                 );
               })}

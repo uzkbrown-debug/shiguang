@@ -4,7 +4,8 @@ import { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence, useMotionValue } from "framer-motion";
 import { useRouter, usePathname } from "next/navigation";
-import { Sparkles, X, Send, ArrowRight, ShieldCheck, Mic, Volume2, VolumeX } from "lucide-react";
+import Link from "next/link";
+import { Sparkles, X, Send, ArrowRight, ShieldCheck, Mic, Volume2, VolumeX, MapPin, CheckCircle2, Compass } from "lucide-react";
 
 // 浏览器语音识别（Web Speech API）的最小类型声明
 interface SpeechRecognitionLike {
@@ -27,12 +28,11 @@ const SPEAK_KEY = "xiaoshi_auto_speak";
 import {
   askAssistant,
   assistantSamples,
+  locationById,
   memoryById,
   personById,
   type AssistantAnswer,
-  type ShiguangMemory,
 } from "@/data/shiguang";
-import MemoryDetail from "./MemoryDetail";
 
 interface Turn {
   role: "user" | "ai";
@@ -42,6 +42,25 @@ interface Turn {
 }
 
 const BALL_POS_KEY = "xiaoshi_ball_pos";
+
+/** 本地规则降级时补一次「我去过没 / 谁去过」，不调模型 */
+async function fetchPlaceCheck(question: string): Promise<{
+  placeCheck?: AssistantAnswer["placeCheck"];
+  places?: AssistantAnswer["places"];
+} | null> {
+  try {
+    const res = await fetch("/api/assistant/place", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return { placeCheck: data?.placeCheck ?? null, places: data?.places ?? null };
+  } catch {
+    return null;
+  }
+}
 
 export default function XiaoshiAI() {
   const router = useRouter();
@@ -68,6 +87,23 @@ export default function XiaoshiAI() {
     },
     [],
   );
+
+  // 面板打开后把光标放进输入框，省掉一次点击
+  useEffect(() => {
+    if (!open) return;
+    const id = window.setTimeout(() => inputRef.current?.focus(), 220);
+    return () => window.clearTimeout(id);
+  }, [open]);
+
+  // Esc 关面板（键盘用户别被浮层困住）
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
 
   const stopVoice = () => {
     recognitionRef.current?.stop();
@@ -153,8 +189,8 @@ export default function XiaoshiAI() {
     }
   };
   const [turns, setTurns] = useState<Turn[]>([]);
-  const [detail, setDetail] = useState<ShiguangMemory | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const ballRef = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
   const ballX = useMotionValue(0);
@@ -223,6 +259,8 @@ export default function XiaoshiAI() {
   const send = async (q: string) => {
     const question = q.trim();
     if (!question || thinking) return;
+    // 最近 2 轮问答一起带上，后端只用它消解指代（「那次是和谁去的」）
+    const history = turns.slice(-4).map((t) => ({ role: t.role, text: t.text }));
     setInput("");
     setTurns((t) => [...t, { role: "user", text: question }]);
     setThinking(true);
@@ -234,7 +272,7 @@ export default function XiaoshiAI() {
       const res = await fetch("/api/assistant/query", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question }),
+        body: JSON.stringify({ question, history }),
       });
       if (res.ok) {
         const data = await res.json();
@@ -242,6 +280,11 @@ export default function XiaoshiAI() {
           result = {
             answer: data.answer,
             evidenceMemoryIds: data.evidenceMemoryIds ?? [],
+            // 后端顺手算好的「记忆 → 攻略」映射：其它入口可能用到
+            evidenceGuideIds: data.evidenceGuideIds ?? {},
+            evidenceCards: data.evidenceCards ?? [],
+            placeCheck: data.placeCheck ?? null,
+            places: data.places ?? null,
           };
           source = "deepseek";
         }
@@ -253,6 +296,9 @@ export default function XiaoshiAI() {
     if (!result) {
       result = askAssistant(question);
       source = "local";
+      // 本地规则不会算「去过没」，补一次只查数据、不调模型的核查
+      const extra = await fetchPlaceCheck(question);
+      if (extra) result = { ...result, ...extra };
     }
 
     setTurns((t) => [...t, { role: "ai", text: result!.answer, result: result!, source }]);
@@ -271,9 +317,12 @@ export default function XiaoshiAI() {
       case "FILTER_BY_PERSON":
         router.push(`/timeline?person=${p.personId}`);
         break;
-      case "FOCUS_MAP_LOCATION":
-        router.push(`/map?location=${p.locationId}`);
+      case "FOCUS_MAP_LOCATION": {
+        // 地图页按关键词过滤，所以传地名而不是 location id
+        const place = locationById(p.locationId)?.name ?? "";
+        router.push(place ? `/map?q=${encodeURIComponent(place)}` : "/map");
         break;
+      }
       case "PREVIEW_STORY":
         router.push(`/stories/${p.storyId}`);
         break;
@@ -281,7 +330,8 @@ export default function XiaoshiAI() {
         router.push(`/recall?year=${p.year}`);
         break;
       case "OPEN_MEMORY":
-        setDetail(memoryById(p.memoryId) ?? null);
+        // 不再弹层：直接传送到这条记忆的完整页面
+        router.push(`/memories/${p.memoryId}`);
         break;
     }
     setOpen(false);
@@ -327,6 +377,8 @@ export default function XiaoshiAI() {
                 openPanel();
               }}
               title="小拾 AI · 可拖动，点击展开"
+              aria-label="打开小拾 AI"
+              aria-expanded={open}
               className="relative w-14 h-14 rounded-full flex items-center justify-center text-white shadow-xl hover:scale-105 transition-transform"
               style={{
                 backgroundImage: "linear-gradient(135deg, #06b6d4 0%, #3b82f6 55%, #6366f1 100%)",
@@ -343,6 +395,8 @@ export default function XiaoshiAI() {
       <AnimatePresence>
         {open && (
           <motion.aside
+            role="dialog"
+            aria-label="小拾 AI"
             initial={{ opacity: 0, scale: 0.94, y: 12 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.96, y: 8 }}
@@ -363,13 +417,19 @@ export default function XiaoshiAI() {
               </div>
               <button
                 onClick={() => setOpen(false)}
+                aria-label="关闭小拾"
                 className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-500/10 transition-colors"
               >
                 <X className="w-4 h-4" />
               </button>
             </header>
 
-            <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4">
+            <div
+              ref={scrollRef}
+              role="log"
+              aria-live="polite"
+              className="flex-1 overflow-y-auto p-4 space-y-4"
+            >
               {turns.length === 0 && (
                 <div className="space-y-3">
                   <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
@@ -387,7 +447,49 @@ export default function XiaoshiAI() {
                 </div>
               )}
 
-              {turns.map((t, i) => (
+              {turns.map((t, i) => {
+                const pc = t.result?.placeCheck ?? null;
+                const myPlaces = t.result?.places ?? null;
+                // 证据方块：后端给了展示信息就用后端的（新上传的记忆本地没有），
+                // 没有就退回本地演示数据。方块一律去「这条记忆」，攻略只在
+                // 「去过的人」那一栏出现 —— 同城三条记忆点进同一篇攻略会像 bug。
+                const cards = t.result?.evidenceCards ?? [];
+                const evidenceItems: {
+                  id: string;
+                  title: string;
+                  date: string;
+                  place: string;
+                  cover: string | null;
+                  people: string[];
+                  tags: string[];
+                }[] = cards.length
+                  ? cards.map((c) => ({
+                      id: c.id,
+                      title: c.title,
+                      date: c.date ?? "",
+                      place: c.place ?? "",
+                      cover: c.cover ?? null,
+                      people: c.people ?? [],
+                      tags: c.tags ?? [],
+                    }))
+                  : (t.result?.evidenceMemoryIds ?? []).flatMap((id) => {
+                      const m = memoryById(id);
+                      if (!m) return [];
+                      return [
+                        {
+                          id,
+                          title: m.title,
+                          date: m.happenedAt.slice(0, 10),
+                          place: locationById(m.locationId)?.name ?? "",
+                          cover: m.cover,
+                          people: m.personIds
+                            .map((pid) => personById(pid)?.name ?? "")
+                            .filter((name) => name && name !== "我"),
+                          tags: m.tags.slice(0, 3),
+                        },
+                      ];
+                    });
+                return (
                 <div key={i} className={t.role === "user" ? "text-right" : ""}>
                   {t.role === "user" ? (
                     <span className="inline-block max-w-[85%] px-3.5 py-2 rounded-2xl bg-sky-500 text-white text-xs text-left">
@@ -412,29 +514,194 @@ export default function XiaoshiAI() {
                         </p>
                       )}
 
-                      {!!t.result?.evidenceMemoryIds.length && (
-                        <div className="space-y-2">
-                          <div className="text-[10px] text-slate-400">证据记忆</div>
-                          {t.result.evidenceMemoryIds.map((id) => {
-                            const m = memoryById(id);
-                            if (!m) return null;
-                            return (
-                              <button
-                                key={id}
-                                onClick={() => setDetail(m)}
-                                className="w-full flex items-center gap-3 p-2 rounded-xl glass-button text-left"
-                              >
-                                {/* eslint-disable-next-line @next/next/no-img-element */}
-                                <img src={m.cover} alt="" className="w-11 h-11 rounded-lg object-cover shrink-0" />
-                                <span className="min-w-0">
-                                  <span className="block text-[11px] font-medium text-slate-700 dark:text-slate-200 truncate">
-                                    {m.title}
-                                  </span>
-                                  <span className="block text-[10px] text-slate-400">
-                                    {m.happenedAt.slice(0, 10)} · {personById(m.personIds[0])?.name}
-                                  </span>
+                      {/* 地点核查：我去过没 → 提示；没去过 → 谁去过，点一下就传送到 TA 的攻略 */}
+                      {pc && (
+                        <div
+                          className={`rounded-xl px-3 py-2.5 space-y-1.5 ${
+                            pc.visited ? "bg-emerald-500/10" : "bg-slate-500/10"
+                          }`}
+                        >
+                          <div
+                            className={`flex items-center gap-1.5 text-[11px] font-medium ${
+                              pc.visited
+                                ? "text-emerald-600 dark:text-emerald-400"
+                                : "text-slate-500 dark:text-slate-300"
+                            }`}
+                          >
+                            {pc.visited ? (
+                              <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                            ) : (
+                              <MapPin className="w-3.5 h-3.5 shrink-0" />
+                            )}
+                            <span className="truncate">
+                              {pc.visited
+                                ? `你去过${pc.place}${
+                                    pc.level === "place" && pc.city && pc.city !== pc.place
+                                      ? `（${pc.city}）`
+                                      : ""
+                                  }${pc.visitCount > 1 ? ` · ${pc.visitCount} 次` : ""}`
+                                : `你还没去过${pc.place}`}
+                            </span>
+                            {pc.checkIn === "visited" && (
+                              <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 text-[9px] text-emerald-600 dark:text-emerald-400 shrink-0">
+                                已打卡
+                              </span>
+                            )}
+                            {pc.checkIn === "wish" && (
+                              <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-[9px] text-amber-600 dark:text-amber-400 shrink-0">
+                                想去
+                              </span>
+                            )}
+                          </div>
+                          {pc.visited && (pc.firstVisit || pc.lastVisit) && (
+                            <div className="text-[10px] text-slate-400">
+                              {pc.firstVisit && pc.lastVisit && pc.firstVisit !== pc.lastVisit
+                                ? `第一次 ${pc.firstVisit} · 最近 ${pc.lastVisit}`
+                                : `记录于 ${pc.firstVisit ?? pc.lastVisit}`}
+                              <span className="text-slate-400/70">（按记忆记录算）</span>
+                            </div>
+                          )}
+                          {pc.visited && !!pc.evidence?.length && (
+                            <div className="text-[10px] text-slate-400 truncate">
+                              依据：{pc.evidence[0].title}
+                              {pc.evidence[0].place ? `（${pc.evidence[0].place}）` : ""}
+                            </div>
+                          )}
+
+                          {!!pc.others?.length ? (
+                            <div className="pt-1 space-y-1.5">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-[10px] text-slate-400 truncate">
+                                  去过的人 · {pc.others.length} 位
+                                  {!!pc.hiddenOthers &&
+                                    `（另有 ${pc.hiddenOthers} 位仅好友可见）`}
                                 </span>
-                              </button>
+                                <Link
+                                  href={`/map?q=${encodeURIComponent(pc.city || pc.place)}`}
+                                  onClick={() => setOpen(false)}
+                                  className="text-[10px] text-sky-500 hover:underline shrink-0"
+                                >
+                                  地图上看
+                                </Link>
+                              </div>
+                              {pc.others.map((o) => (
+                                <Link
+                                  key={o.userId}
+                                  href={o.guideId ? `/travel/${o.guideId}` : `/memories/${o.memoryId}`}
+                                  onClick={() => setOpen(false)}
+                                  title={o.guideId ? "打开 TA 的攻略" : "打开 TA 的记忆"}
+                                  className="group flex items-center gap-2 rounded-lg bg-white/50 dark:bg-white/5 px-2 py-1.5 hover:ring-1 hover:ring-sky-400/50 transition-all"
+                                >
+                                  {o.avatar ? (
+                                    // eslint-disable-next-line @next/next/no-img-element
+                                    <img
+                                      src={o.avatar}
+                                      alt=""
+                                      className="w-6 h-6 rounded-full object-cover shrink-0"
+                                    />
+                                  ) : (
+                                    <span className="w-6 h-6 rounded-full bg-slate-400/40 shrink-0" />
+                                  )}
+                                  <span className="min-w-0 flex-1">
+                                    <span className="block text-[11px] text-slate-700 dark:text-slate-200 truncate">
+                                      {o.name}
+                                      {o.count > 1 ? ` · ${o.count} 次` : ""}
+                                    </span>
+                                    <span className="block text-[10px] text-slate-400 truncate">
+                                      {o.guideTitle || o.title || "有记录"}
+                                    </span>
+                                  </span>
+                                  <span className="shrink-0 flex items-center gap-1 text-[10px] text-sky-500">
+                                    {o.guideId ? "攻略" : "记忆"}
+                                    <ArrowRight className="w-3 h-3 transition-transform group-hover:translate-x-0.5" />
+                                  </span>
+                                </Link>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="text-[10px] text-slate-400">
+                              数据库里还没有人记录过这里。
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* 我去过哪些地方：按城市聚合的足迹 */}
+                      {!!myPlaces?.length && (
+                        <div className="rounded-xl bg-sky-500/10 px-3 py-2.5">
+                          <div className="flex items-center gap-1.5 text-[11px] font-medium text-sky-600 dark:text-sky-400">
+                            <Compass className="w-3.5 h-3.5" />
+                            你去过 {myPlaces.length} 个地方
+                          </div>
+                          <div className="flex flex-wrap gap-1.5 mt-2">
+                            {myPlaces.slice(0, 10).map((p) => (
+                              <Link
+                                key={p.city}
+                                href={`/map?q=${encodeURIComponent(p.city)}`}
+                                onClick={() => setOpen(false)}
+                                title={p.last ? `最近一次 ${p.last}` : "在地图上看看"}
+                                className="px-2 py-1 rounded-lg bg-white/50 dark:bg-white/5 text-[10px] text-slate-600 dark:text-slate-300 hover:ring-1 hover:ring-sky-400/50 transition-all"
+                              >
+                                {p.city}
+                                <span className="text-slate-400"> · {p.count}</span>
+                              </Link>
+                            ))}
+                            {myPlaces.length > 10 && (
+                              <span className="px-2 py-1 text-[10px] text-slate-400">
+                                还有 {myPlaces.length - 10} 个
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {!!evidenceItems.length && (
+                        <div className="space-y-2">
+                          <div className="flex items-center gap-1 text-[10px] text-slate-400">
+                            证据记忆
+                            <span className="text-slate-300 dark:text-slate-500">· 点方块直接打开</span>
+                          </div>
+                          {evidenceItems.map((item) => {
+                            // 证据方块一律去这条记忆本身；攻略只在「去过的人」那一栏
+                            const meta = [item.date, item.place, item.people.join("、")]
+                              .filter(Boolean)
+                              .join(" · ");
+                            return (
+                              <Link
+                                key={item.id}
+                                href={`/memories/${item.id}`}
+                                onClick={() => setOpen(false)}
+                                title="打开这条记忆"
+                                className="group w-full flex items-center gap-3 p-2 rounded-xl glass-button text-left hover:ring-1 hover:ring-sky-400/50 transition-all"
+                              >
+                                {item.cover ? (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img
+                                    src={item.cover}
+                                    alt={item.title}
+                                    className="w-11 h-11 rounded-lg object-cover shrink-0"
+                                  />
+                                ) : (
+                                  <span className="w-11 h-11 rounded-lg bg-slate-400/30 shrink-0" />
+                                )}
+                                <span className="min-w-0 flex-1">
+                                  <span className="block text-[11px] font-medium text-slate-700 dark:text-slate-200 truncate">
+                                    {item.title}
+                                  </span>
+                                  <span className="block text-[10px] text-slate-400 truncate">
+                                    {meta}
+                                  </span>
+                                  {!!item.tags.length && (
+                                    <span className="block text-[10px] text-slate-400/80 truncate">
+                                      {item.tags.map((tag) => `#${tag}`).join(" ")}
+                                    </span>
+                                  )}
+                                </span>
+                                <span className="shrink-0 flex items-center gap-1 text-[10px] text-sky-500 dark:text-sky-400">
+                                  记忆
+                                  <ArrowRight className="w-3 h-3 transition-transform group-hover:translate-x-0.5" />
+                                </span>
+                              </Link>
                             );
                           })}
                         </div>
@@ -452,7 +719,8 @@ export default function XiaoshiAI() {
                     </div>
                   )}
                 </div>
-              ))}
+                );
+              })}
 
               {thinking && (
                 <div className="flex items-center gap-2 text-[11px] text-slate-400">
@@ -477,6 +745,7 @@ export default function XiaoshiAI() {
                   <Mic className="w-4 h-4" />
                 </button>
                 <input
+                  ref={inputRef}
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && send(input)}
@@ -514,8 +783,6 @@ export default function XiaoshiAI() {
           </motion.aside>
         )}
       </AnimatePresence>
-
-      <MemoryDetail memory={detail} onClose={() => setDetail(null)} />
     </>
   );
 

@@ -10,8 +10,9 @@ from sqlalchemy.orm import Session
 import ingest
 import llm
 import tts
+from auth import optional_user
 from db import get_db
-from models import Location, Memory, MemoryMedia, Story, StoryScene
+from models import Location, Memory, MemoryMedia, Story, StoryScene, User
 
 router = APIRouter(prefix="/api", tags=["配音故事"])
 
@@ -97,6 +98,7 @@ def create_narration(
 
     story = Story(
         id=f"story_{uuid.uuid4().hex[:10]}",
+        user_id=memory.user_id,
         title=memory.title or "一段记忆",
         subtitle=memory_id,
         cover=images[0] if images else memory.cover,
@@ -153,10 +155,16 @@ def get_narration(memory_id: str, db: Session = Depends(get_db)):
 
 
 @router.delete("/stories/{story_id}")
-def delete_story(story_id: str, db: Session = Depends(get_db)):
+def delete_story(
+    story_id: str,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(optional_user),
+):
     story = db.get(Story, story_id)
     if not story:
         raise HTTPException(404, "故事不存在")
+    if user is None or story.user_id != user.id:
+        raise HTTPException(403, "只能删自己的故事")
     rows = db.scalars(select(StoryScene).where(StoryScene.story_id == story_id)).all()
     for scene in rows:
         if scene.audio_url and scene.audio_url.startswith("/media/audio/"):

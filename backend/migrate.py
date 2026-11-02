@@ -20,6 +20,8 @@ _ADD_COLUMNS: dict[str, list[tuple[str, str]]] = {
     ],
     "friendships": [("remark", "VARCHAR(64) NULL")],
     "memory_media": [("captured_at", "VARCHAR(32) NULL")],
+    # 故事归属：历史演示数据留 NULL，列表里只展示自己生成的那些
+    "stories": [("user_id", "VARCHAR(64) NULL")],
 }
 
 

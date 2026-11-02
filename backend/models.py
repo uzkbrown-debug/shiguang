@@ -126,6 +126,8 @@ class Story(Base):
     __tablename__ = "stories"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    # 归属：故事由谁的记忆生成；演示数据为 NULL，列表里不会展示给任何人
+    user_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
     title: Mapped[str] = mapped_column(String(255))
     subtitle: Mapped[str | None] = mapped_column(String(255))
     cover: Mapped[str | None] = mapped_column(String(512))

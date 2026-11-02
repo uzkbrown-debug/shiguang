@@ -5,7 +5,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import false, func, or_, select, update
 from sqlalchemy.orm import Session, selectinload
 
 from auth import can_view, current_user, friend_ids, optional_user, visible_owner_ids
@@ -209,10 +209,25 @@ def explore(
     viewer: User | None = Depends(optional_user),
 ):
     owners = visible_owner_ids(db, viewer, scope)
+    # 世界档只放「公开」的内容：自己的私密 / 好友可见不该出现在这里
+    if scope in ("world", "everyone", "discover"):
+        shown = Memory.visibility == "public"
+    elif viewer is not None and scope in (None, "", "all", "friends"):
+        # 「好友」档：只看好友；一个好友都没有就是空的，不能退化成全世界
+        shown = Memory.user_id.in_(owners) if owners else false()
+    elif owners:
+        shown = Memory.user_id.in_(owners)
+    else:
+        shown = Memory.visibility == "public"
+
     mems = db.scalars(
         select(Memory)
         .options(selectinload(Memory.person_links))
-        .where(Memory.user_id.in_(owners) if owners else Memory.visibility == "public")
+        .where(shown)
+        # 草稿（刚传上来还没分析 / 没保存）不进地图，否则界面上多出一堆空点
+        .where(
+            or_(Memory.ai_status.is_(None), Memory.ai_status.notin_(["pending", "draft"]))
+        )
     ).all()
     if year:
         mems = [m for m in mems if (m.happened_at or "").startswith(year)]
@@ -250,10 +265,17 @@ def explore(
             }
         )
 
+    if scope in ("world", "everyone", "discover"):
+        route_filter = TravelRoute.visibility == "public"
+    elif viewer is not None and scope in (None, "", "all", "friends"):
+        route_filter = TravelRoute.user_id.in_(owners) if owners else false()
+    elif owners:
+        route_filter = TravelRoute.user_id.in_(owners)
+    else:
+        route_filter = TravelRoute.visibility == "public"
+
     routes = db.scalars(
-        select(TravelRoute)
-        .options(selectinload(TravelRoute.points))
-        .where(TravelRoute.user_id.in_(owners) if owners else TravelRoute.visibility == "public")
+        select(TravelRoute).options(selectinload(TravelRoute.points)).where(route_filter)
     ).all()
     routes = [r for r in routes if can_view(db, viewer, r.user_id, r.visibility)]
 
@@ -317,10 +339,17 @@ def explore(
             )
 
     # 攻略出处：这个地点在哪篇攻略的第几天被写到（一篇攻略只出一个最贴的那天）
+    if scope in ("world", "everyone", "discover"):
+        guide_filter = TravelGuide.visibility == "public"
+    elif viewer is not None and scope in (None, "", "all", "friends"):
+        guide_filter = TravelGuide.user_id.in_(owners) if owners else false()
+    elif owners:
+        guide_filter = TravelGuide.user_id.in_(owners)
+    else:
+        guide_filter = TravelGuide.visibility == "public"
+
     guides = db.scalars(
-        select(TravelGuide)
-        .options(selectinload(TravelGuide.days_plan))
-        .where(TravelGuide.user_id.in_(owners) if owners else TravelGuide.visibility == "public")
+        select(TravelGuide).options(selectinload(TravelGuide.days_plan)).where(guide_filter)
     ).all()
     day_text = {
         g.id: [(d, f"{d.title or ''}{d.content or ''}") for d in g.days_plan] for g in guides
@@ -759,7 +788,15 @@ def list_routes(
     else:
         ids = visible_owner_ids(db, viewer, scope)
     stmt = select(TravelRoute).options(selectinload(TravelRoute.points))
-    stmt = stmt.where(TravelRoute.user_id.in_(ids) if ids else TravelRoute.visibility == "public")
+    if owner:
+        stmt = stmt.where(TravelRoute.user_id.in_(ids))
+    elif scope in ("world", "everyone", "discover"):
+        # 世界档只放公开的：自己的好友可见 / 私密不该出现在这里
+        stmt = stmt.where(TravelRoute.visibility == "public")
+    elif viewer is not None and scope in (None, "", "all", "friends"):
+        stmt = stmt.where(TravelRoute.user_id.in_(ids) if ids else false())
+    else:
+        stmt = stmt.where(TravelRoute.user_id.in_(ids) if ids else TravelRoute.visibility == "public")
     rows = db.scalars(stmt.order_by(TravelRoute.start_date.desc())).all()
     rows = [r for r in rows if can_view(db, viewer, r.user_id, r.visibility)]
     if q:
@@ -832,6 +869,10 @@ def delete_route(route_id: str, db: Session = Depends(get_db), user: User = Depe
         raise HTTPException(404, "路线不存在")
     if route.user_id != user.id:
         raise HTTPException(403, "只能删自己的路线")
+    # 引用这条路线存在的攻略不跟着删，只把引用置空，避免留下打不开的悬空链接
+    db.execute(
+        update(TravelGuide).where(TravelGuide.route_id == route_id).values(route_id=None)
+    )
     db.delete(route)
     db.commit()
     return {"deleted": route_id}
@@ -913,7 +954,15 @@ def list_guides(
     else:
         ids = visible_owner_ids(db, viewer, scope)
     stmt = select(TravelGuide).options(selectinload(TravelGuide.media), selectinload(TravelGuide.days_plan))
-    stmt = stmt.where(TravelGuide.user_id.in_(ids) if ids else TravelGuide.visibility == "public")
+    if owner:
+        stmt = stmt.where(TravelGuide.user_id.in_(ids))
+    elif scope in ("world", "everyone", "discover"):
+        # 世界档只放公开的：自己的好友可见 / 私密不该出现在这里
+        stmt = stmt.where(TravelGuide.visibility == "public")
+    elif viewer is not None and scope in (None, "", "all", "friends"):
+        stmt = stmt.where(TravelGuide.user_id.in_(ids) if ids else false())
+    else:
+        stmt = stmt.where(TravelGuide.user_id.in_(ids) if ids else TravelGuide.visibility == "public")
     rows = db.scalars(stmt.order_by(TravelGuide.created_at.desc())).all()
     rows = [g for g in rows if can_view(db, viewer, g.user_id, g.visibility)]
     if q:

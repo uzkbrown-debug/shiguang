@@ -1,0 +1,160 @@
+{
+ "total": 89,
+ "groups": 79,
+ "duplicates": {
+  "大阪/大阪": [
+   {
+    "id": "loc_38ecd57e",
+    "name": "大阪",
+    "city": "大阪",
+    "memories": 0
+   },
+   {
+    "id": "loc_demo_5911a269d9",
+    "name": "大阪",
+    "city": "大阪",
+    "memories": 0
+   }
+  ],
+  "京都/京都": [
+   {
+    "id": "loc_85336ae3",
+    "name": "京都",
+    "city": "京都",
+    "memories": 2
+   },
+   {
+    "id": "loc_demo_e099482cee",
+    "name": "京都",
+    "city": "京都",
+    "memories": 0
+   }
+  ],
+  "成都/成都": [
+   {
+    "id": "loc_chengdu",
+    "name": "成都",
+    "city": "成都市",
+    "memories": 1
+   },
+   {
+    "id": "loc_demo_65b36b9c4d",
+    "name": "成都",
+    "city": "成都",
+    "memories": 0
+   },
+   {
+    "id": "loc_成都",
+    "name": "成都",
+    "city": "成都",
+    "memories": 1
+   }
+  ],
+  "重庆/重庆": [
+   {
+    "id": "loc_chongqing",
+    "name": "重庆",
+    "city": "重庆市",
+    "memories": 2
+   },
+   {
+    "id": "loc_demo_e633e0955a",
+    "name": "重庆",
+    "city": "重庆",
+    "memories": 0
+   },
+   {
+    "id": "loc_重庆",
+    "name": "重庆",
+    "city": "重庆",
+    "memories": 1
+   }
+  ],
+  "昆明/昆明": [
+   {
+    "id": "loc_demo_12ddb60841",
+    "name": "昆明",
+    "city": "昆明",
+    "memories": 0
+   },
+   {
+    "id": "loc_昆明",
+    "name": "昆明",
+    "city": "昆明",
+    "memories": 1
+   }
+  ],
+  "大理/大理": [
+   {
+    "id": "loc_demo_64bba7e71d",
+    "name": "大理",
+    "city": "大理",
+    "memories": 0
+   },
+   {
+    "id": "loc_大理",
+    "name": "大理",
+    "city": "大理",
+    "memories": 1
+   }
+  ],
+  "厦门/厦门": [
+   {
+    "id": "loc_demo_c16289732b",
+    "name": "厦门",
+    "city": "厦门",
+    "memories": 3
+   },
+   {
+    "id": "loc_xiamen",
+    "name": "厦门",
+    "city": "厦门市",
+    "memories": 0
+   }
+  ],
+  "杭州/杭州": [
+   {
+    "id": "loc_demo_c885678463",
+    "name": "杭州",
+    "city": "杭州",
+    "memories": 3
+   },
+   {
+    "id": "loc_hangzhou",
+    "name": "杭州",
+    "city": "杭州市",
+    "memories": 0
+   }
+  ]
+ },
+ "no_coords": [],
+ "unused": [
+  "loc_38ecd57e",
+  "loc_6d29fedc",
+  "loc_demo_06e2b1eaa1",
+  "loc_demo_12ddb60841",
+  "loc_demo_160ddb7c48",
+  "loc_demo_28a6fbc524",
+  "loc_demo_2e9067b1bf",
+  "loc_demo_47300cecb5",
+  "loc_demo_5911a269d9",
+  "loc_demo_6125632865",
+  "loc_demo_64bba7e71d",
+  "loc_demo_65b36b9c4d",
+  "loc_demo_6b28ba5a92",
+  "loc_demo_800ba07052",
+  "loc_demo_912b45bf80",
+  "loc_demo_9350bdd90d",
+  "loc_demo_cee2957a0c",
+  "loc_demo_ddf055b986",
+  "loc_demo_e099482cee",
+  "loc_demo_e4d70dea39",
+  "loc_demo_e633e0955a",
+  "loc_demo_e6a53f97aa",
+  "loc_demo_f4cd8bd995",
+  "loc_hangzhou",
+  "loc_p_1373a34880",
+  "loc_tokyo",
+  "loc_xiamen"
+ ]
+}

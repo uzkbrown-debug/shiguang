@@ -60,6 +60,12 @@ def _system_prompt(style: str) -> str:
    照片会附上 EXIF 元数据（拍摄时间、机型、GPS 等）
 2. 用户自己填的要点（user_notes）：给了的话，**这些是事实，必须优先采用**；
    照片和元数据只用来补充画面细节，不要和用户说的冲突
+3. 按天生成时还会给 day_title / day_index / day_total：
+   **day_title 只是这一天的标题，用来判断"这是第几天、大致在做什么"，它不是事实来源**。
+   正文必须以照片里真实看到的东西为准；照片里没有的地点、事件、动作一律不写，
+   也不许为了贴合标题编造过渡（照片里没有山，就不要写"从山上下来"；
+   照片里没人举杯，就不要写"两个人碰了一下杯子"）。
+   标题和照片实在对不上时，按照片写，把标题只当标题用。
 
 【先看清楚，再动笔】
 写之前先逐张把画面看完，尤其是这些容易被漏掉的重点：
@@ -160,20 +166,32 @@ def _extract_json(text: str) -> dict | None:
     return None
 
 
-ASSISTANT_PROMPT = """你是「拾光」记忆馆的助手，名字叫小拾。用户在问他自己的记忆相关的问题。
+ASSISTANT_PROMPT = """你是「拾光」记忆馆的助手，名字叫小拾。用户把你当成随身的旅行与回忆助手。
 
 你必须遵守：
-1. 只依据【记忆列表】里给出的内容回答，绝不编造事实、人名、地点或事件
+1. 凡是涉及「我 / 我的」的事实（去过哪、和谁、哪天、花了多少），只能依据【记忆列表】和【地点核查】，绝不编造用户的经历
 2. 记忆列表里没有依据时，明确说"你的记忆库里没有相关记录"，并建议换一种问法
-3. 回答用中文，2-4 句，口语自然，可以引用具体日期、标题、地点
-4. 你在回答里引用到的记忆，把它们的 id 放进 evidenceMemoryIds（最多 3 条）
-5. 如果是寒暄、或问"你能做什么"，正常回答即可，此时 evidenceMemoryIds 用空数组
-6. 只输出 JSON，不要解释：
+3. 除此之外你什么都可以聊：目的地推荐、行程建议、签证/交通常识、拍照思路、情绪陪伴——常识与建议类内容不需要记忆依据，也不要说"没有记录"
+4. 回答用中文，2-4 句，口语自然，可以引用具体日期、标题、地点
+5. 你在回答里引用到的记忆，把它们的 id 放进 evidenceMemoryIds（最多 3 条）
+6. 如果是寒暄、或问"你能做什么"，正常回答即可，此时 evidenceMemoryIds 用空数组
+7. 如果消息里带了【地点核查】提示，一切以它为准：它说去过就说"你去过"，它说没去过就必须明确说"你没去过"，并可以顺口提一句谁去过
+8. 【对话历史】只用来消解指代（那次、那里、他），不要照抄历史里的旧答案，也不要假装记得历史里没写的事
+9. 只输出 JSON，不要解释：
 {"answer":"...","evidenceMemoryIds":["mem_xxx"]}"""
 
 
-def answer_memory_question(question: str, memories: list[dict]) -> dict | None:
-    """基于检索到的记忆回答问题；未配置 Key 或失败返回 None（调用方降级）"""
+def answer_memory_question(
+    question: str,
+    memories: list[dict],
+    hint: str | None = None,
+    history: list[dict] | None = None,
+) -> dict | None:
+    """基于检索到的记忆回答问题；未配置 Key 或失败返回 None（调用方降级）
+
+    hint 是后端算好的硬事实（比如「这个地方他根本没去过」），会比模型的猜测优先。
+    history 只用来消解指代，不参与事实判断。
+    """
     if not available():
         return None
 
@@ -182,13 +200,16 @@ def answer_memory_question(question: str, memories: list[dict]) -> dict | None:
 
         client = OpenAI(api_key=DEEPSEEK_API_KEY.strip(), base_url=DEEPSEEK_BASE_URL, timeout=60)
         payload = {"question": question, "memories": memories}
+        if history:
+            payload["history"] = history[-6:]
+        messages = [{"role": "system", "content": ASSISTANT_PROMPT}]
+        if hint:
+            messages.append({"role": "system", "content": hint})
+        messages.append({"role": "user", "content": json.dumps(payload, ensure_ascii=False)})
 
         response = client.chat.completions.create(
             model=DEEPSEEK_MODEL,
-            messages=[
-                {"role": "system", "content": ASSISTANT_PROMPT},
-                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-            ],
+            messages=messages,
             temperature=0.5,
             max_tokens=800,
         )

@@ -89,3 +89,22 @@ tools/push-v1.bat
 
 # ---------- 提交用的文档产物（二进制） ----------
 /*.docx
+
+# pack output (may contain .env and local media)
+/dist/
+
+# local test accounts (contains plaintext passwords)
+/测试账号.md
+
+# ---------- 本轮新增的忽略 ----------
+# binlog 里捞出来的恢复数据：含账号密码哈希，绝对不能进仓库
+backend/legacy_recovered/
+# 用户头像 / 语音缓存（本地数据）
+backend/media/avatars/
+backend/media/audio/
+# 大文件与临时产物
+视频/
+_flamepreview/
+_c3.txt
+_social.json
+backend/scripts/reset_demo_passwords.py

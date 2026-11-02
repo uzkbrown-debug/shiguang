@@ -1,8 +1,9 @@
 """账号、好友、用户资料接口"""
 import hmac
 import uuid
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
@@ -21,12 +22,15 @@ from auth import (
     optional_user,
     verify_password,
 )
+from config import MEDIA_DIR
 from db import get_db
 from models import (
     Friendship,
     FriendRequest,
     Location,
     Memory,
+    MemoryMedia,
+    MemoryPerson,
     TravelGuide,
     TravelRoute,
     User,
@@ -55,12 +59,35 @@ def stats_of(db: Session, user_id: str) -> dict:
         .where(Memory.user_id == user_id, Location.city.isnot(None))
         .distinct()
     ).all()
+    # 首页要展示的「照片 / 人物 / 跨度」也按这个人真实算，别用演示数字
+    photo_count = db.scalar(
+        select(func.count())
+        .select_from(MemoryMedia)
+        .join(Memory, Memory.id == MemoryMedia.memory_id)
+        .where(Memory.user_id == user_id)
+    ) or 0
+    person_count = db.scalar(
+        select(func.count(func.distinct(MemoryPerson.person_id)))
+        .select_from(MemoryPerson)
+        .join(Memory, Memory.id == MemoryPerson.memory_id)
+        .where(Memory.user_id == user_id)
+    ) or 0
+    years = [
+        int(str(v)[:4])
+        for v in db.scalars(
+            select(Memory.happened_at).where(Memory.user_id == user_id, Memory.happened_at.isnot(None))
+        ).all()
+        if str(v)[:4].isdigit()
+    ]
     return {
         "memory_count": memory_count,
         "route_count": route_count,
         "guide_count": guide_count,
         "city_count": len(cities),
         "cities": [c for c in cities if c][:8],
+        "photo_count": photo_count,
+        "person_count": person_count,
+        "year_span": (max(years) - min(years) + 1) if years else 0,
     }
 
 
@@ -151,12 +178,17 @@ def _set_cookie(response: Response, token: str, days: int) -> None:
 @router.post("/auth/register")
 def register(body: RegisterBody, response: Response, db: Session = Depends(get_db)):
     username = body.username.strip()
+    # 账号只允许数字：它是登录凭据，也决定 @ 后面显示什么
+    if not username.isdigit():
+        raise HTTPException(400, "账号只能使用数字")
     if len(username) < 3:
-        raise HTTPException(400, "用户名至少 3 个字符")
+        raise HTTPException(400, "账号至少 3 位数字")
+    if len(username) > 20:
+        raise HTTPException(400, "账号最多 20 位数字")
     if len(body.password) < 6:
         raise HTTPException(400, "密码至少 6 位")
     if db.scalar(select(User).where(User.username == username)):
-        raise HTTPException(409, "这个用户名已经有人用了")
+        raise HTTPException(409, "这个账号已经注册过了")
 
     salt = new_salt()
     answer_salt = new_salt() if body.security_answer else None
@@ -293,6 +325,48 @@ def update_me(body: ProfileBody, db: Session = Depends(get_db), user: User = Dep
     if body.home_city is not None:
         user.home_city = body.home_city.strip()[:32] or None
     db.commit()
+    return user_brief(db, user, user)
+
+
+AVATAR_DIR = Path(MEDIA_DIR) / "avatars"
+AVATAR_EXT = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+AVATAR_MAX_BYTES = 5 * 1024 * 1024
+
+
+@router.post("/auth/avatar")
+async def upload_avatar(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """换头像：存到 media/avatars/，返回新的头像地址
+
+    注册流程里前端会先调 /api/auth/register（拿到会话），再立刻调这里上传头像。
+    """
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in AVATAR_EXT:
+        raise HTTPException(415, "只支持 jpg / png / webp / gif")
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, "空文件")
+    if len(data) > AVATAR_MAX_BYTES:
+        raise HTTPException(413, "头像不要超过 5 MB")
+
+    AVATAR_DIR.mkdir(parents=True, exist_ok=True)
+    name = f"avatar_{user.id}_{uuid.uuid4().hex[:10]}{ext}"
+    (AVATAR_DIR / name).write_bytes(data)
+
+    old = user.avatar or ""
+    user.avatar = f"/media/avatars/{name}"
+    db.commit()
+
+    # 换下来的旧头像顺手删掉，别在磁盘上堆垃圾
+    if old.startswith("/media/avatars/"):
+        stale = AVATAR_DIR / old.rsplit("/", 1)[-1]
+        if stale.exists():
+            stale.unlink(missing_ok=True)
+
     return user_brief(db, user, user)
 
 

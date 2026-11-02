@@ -18,7 +18,6 @@ import KiraSparkle from "@/components/ui/KiraSparkle";
 import WelcomeScreen from "@/components/layout/WelcomeScreen";
 import BootGate from "@/components/layout/BootGate";
 import SessionGuard from "@/components/layout/SessionGuard";
-import VisitorTracker from "@/components/layout/VisitorTracker";
 import XiaoshiAI from "@/components/shiguang/XiaoshiAI";
 import UserAvatar from "@/components/shiguang/UserAvatar";
 import DevToolsTranslator from "@/components/shiguang/DevToolsTranslator";
@@ -90,7 +89,6 @@ export default function RootLayout({
                   <ToastProvider>
                     <SessionGuard />
                     <BackgroundRenderer />
-                    <VisitorTracker />
                     <ClickEffect />
                     <RadialMenu />
                     <MouseTrail />

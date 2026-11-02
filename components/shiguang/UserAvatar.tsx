@@ -1,39 +1,43 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion, AnimatePresence, useMotionValue } from "framer-motion";
-import { User, LogOut, Clock, MapPin, BookOpen, X } from "lucide-react";
-import { getGithubUser } from "@/app/api/messages";
-import type { GitHubUser } from "@/app/api/types";
-import { siteConfig } from "@/siteConfig";
-
-function GithubIcon({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" fill="currentColor" className={className}>
-      <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
-    </svg>
-  );
-}
-
-const DEMO_USER: GitHubUser = {
-  id: 900,
-  login: "demo-user",
-  avatar: "/images/hong.jpg",
-  bio: "本机演示身份 · 前端开发 / 示例大学",
-};
+import { User, LogOut, Clock, MapPin, BookOpen, X, LogIn, Compass, Sparkles, Camera } from "lucide-react";
+import { fetchMe, logout as doLogout, uploadAvatar, type MeUser } from "@/lib/session";
 
 const POS_KEY = "avatar_pos";
 
 export default function UserAvatar() {
   const pathname = usePathname();
-  const [user, setUser] = useState<GitHubUser | null>(null);
+  const [me, setMe] = useState<MeUser | null>(null);
+  const [ready, setReady] = useState(false);
   const [open, setOpen] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [hint, setHint] = useState("");
   const boxRef = useRef<HTMLDivElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
   const dragging = useRef(false);
   const x = useMotionValue(0);
   const y = useMotionValue(0);
+
+  // 真实会话：和后端 /api/auth/me 保持一致
+  const reload = useCallback(() => {
+    fetchMe()
+      .then(setMe)
+      .finally(() => setReady(true));
+  }, []);
+
+  useEffect(() => {
+    reload();
+  }, [reload]);
+
+  // 换页时（比如从 /login 回来）重新确认一次登录态
+  useEffect(() => {
+    if (pathname.startsWith("/login")) return;
+    reload();
+  }, [pathname, reload]);
 
   // 恢复上次拖到的位置
   useEffect(() => {
@@ -51,7 +55,6 @@ export default function UserAvatar() {
     }
   }, [x, y]);
 
-  // 拖动后别让它跑出屏幕
   const clampToViewport = () => {
     const el = boxRef.current;
     if (!el) return;
@@ -67,31 +70,6 @@ export default function UserAvatar() {
     y.set(ny);
   };
 
-  // 读取本地登录态（与留言板、说说共用同一份 localStorage）
-  useEffect(() => {
-    const saved = localStorage.getItem("github_user");
-    if (saved) {
-      try {
-        setUser(JSON.parse(saved));
-        return;
-      } catch {
-        /* ignore */
-      }
-    }
-    const token = localStorage.getItem("github_token");
-    if (token) {
-      getGithubUser(token)
-        .then((u) => {
-          setUser(u);
-          localStorage.setItem("github_user", JSON.stringify(u));
-        })
-        .catch(() => {
-          localStorage.removeItem("github_token");
-        });
-    }
-  }, []);
-
-  // 点击外部关闭
   useEffect(() => {
     const onClick = (e: MouseEvent) => {
       if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
@@ -100,27 +78,26 @@ export default function UserAvatar() {
     return () => document.removeEventListener("mousedown", onClick);
   }, []);
 
-  const login = () => {
-    window.location.href = "/api/auth/github/login";
-  };
-
-  const loginAsDemo = () => {
-    localStorage.setItem("github_user", JSON.stringify(DEMO_USER));
-    setUser(DEMO_USER);
-    setOpen(false);
-  };
-
-  const logout = () => {
-    localStorage.removeItem("github_token");
-    localStorage.removeItem("github_user");
-    // 退出站点登录
-    document.cookie = `${siteConfig.auth?.cookieName ?? "sg_auth"}=; path=/; max-age=0`;
-    setUser(null);
-    setOpen(false);
-    window.location.href = "/login";
-  };
-
   if (pathname.startsWith("/login")) return null;
+
+  const displayName = me?.nickname || me?.username || "未登录";
+  const stats = me?.stats;
+
+  const pickAvatar = async (file: File | null) => {
+    if (!file) return;
+    setUploading(true);
+    setHint("");
+    try {
+      const next = await uploadAvatar(file);
+      setMe(next);
+      setHint("头像已更新");
+    } catch (err) {
+      setHint(err instanceof Error ? err.message : "上传失败");
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  };
 
   return (
     <motion.div
@@ -152,36 +129,82 @@ export default function UserAvatar() {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 8, scale: 0.97 }}
             transition={{ duration: 0.18 }}
-            className="absolute bottom-full mb-3 left-0 w-64 rounded-2xl border border-white/50 dark:border-white/10 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl shadow-2xl overflow-hidden"
+            className="absolute bottom-full mb-3 left-0 w-[268px] rounded-2xl border border-white/50 dark:border-white/10 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl shadow-2xl overflow-hidden"
           >
-            {user ? (
+            {me ? (
               <>
                 <div className="p-4 flex items-center gap-3 border-b border-slate-200/60 dark:border-white/10">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={user.avatar}
-                    alt={user.login}
-                    className="w-11 h-11 rounded-full object-cover ring-2 ring-sky-400/40"
-                  />
+                  {me.avatar ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={me.avatar}
+                      alt={displayName}
+                      className="w-11 h-11 rounded-full object-cover ring-2 ring-sky-400/40"
+                    />
+                  ) : (
+                    <span className="w-11 h-11 rounded-full bg-gradient-to-br from-cyan-400 to-indigo-500 flex items-center justify-center text-white text-sm font-semibold ring-2 ring-sky-400/30">
+                      {displayName.slice(0, 1)}
+                    </span>
+                  )}
                   <div className="min-w-0 flex-1">
                     <div className="text-sm font-semibold text-slate-800 dark:text-slate-100 truncate">
-                      {user.login}
+                      {displayName}
                     </div>
-                    <div className="text-[11px] text-slate-400 truncate">{user.bio || "已登录"}</div>
+                    <div className="text-[11px] text-slate-400 truncate">
+                      @{me.username}
+                      {me.home_city ? ` · ${me.home_city}` : ""}
+                    </div>
                   </div>
                   <button
                     onClick={() => setOpen(false)}
+                    aria-label="关闭"
                     className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-500/10 transition-colors"
                   >
                     <X className="w-3.5 h-3.5" />
                   </button>
                 </div>
 
+                {stats && (
+                  <div className="grid grid-cols-3 divide-x divide-slate-200/60 dark:divide-white/10 border-b border-slate-200/60 dark:border-white/10">
+                    {[
+                      { label: "记忆", value: stats.memory_count },
+                      { label: "攻略", value: stats.guide_count },
+                      { label: "城市", value: stats.city_count },
+                    ].map((item) => (
+                      <div key={item.label} className="py-2.5 text-center">
+                        <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">
+                          {item.value}
+                        </div>
+                        <div className="text-[10px] text-slate-400">{item.label}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
                 <div className="p-2">
+                  <button
+                    onClick={() => fileRef.current?.click()}
+                    disabled={uploading}
+                    className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs text-slate-600 dark:text-slate-300 hover:bg-slate-500/10 transition-colors disabled:opacity-60"
+                  >
+                    <Camera className="w-4 h-4" />
+                    {uploading ? "正在上传头像…" : "更换头像"}
+                  </button>
+                  <input
+                    ref={fileRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => void pickAvatar(e.target.files?.[0] ?? null)}
+                  />
+                  {hint && <p className="px-3 pb-1 text-[10px] text-slate-400">{hint}</p>}
                   {[
+                    { href: `/u/${me.id}`, label: "我的主页", icon: User },
                     { href: "/timeline", label: "我的时间线", icon: Clock },
                     { href: "/map", label: "我的记忆地图", icon: MapPin },
+                    { href: "/travel", label: "我的旅行攻略", icon: Compass },
                     { href: "/stories", label: "我的故事馆", icon: BookOpen },
+                    { href: "/upload", label: "添加一条记忆", icon: Sparkles },
                   ].map((item) => {
                     const Icon = item.icon;
                     return (
@@ -197,7 +220,10 @@ export default function UserAvatar() {
                     );
                   })}
                   <button
-                    onClick={logout}
+                    onClick={() => {
+                      setOpen(false);
+                      void doLogout();
+                    }}
                     className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs text-rose-500 hover:bg-rose-500/10 transition-colors"
                   >
                     <LogOut className="w-4 h-4" />
@@ -212,26 +238,23 @@ export default function UserAvatar() {
                     <User className="w-5 h-5 text-slate-400" />
                   </div>
                   <div>
-                    <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">未登录</div>
+                    <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">
+                      {ready ? "未登录" : "正在确认登录状态…"}
+                    </div>
                     <div className="text-[11px] text-slate-400">登录后同步你的记忆与收藏</div>
                   </div>
                 </div>
 
-                <button
-                  onClick={login}
+                <Link
+                  href={`/login?from=${encodeURIComponent(pathname || "/")}`}
+                  onClick={() => setOpen(false)}
                   className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-xs font-medium hover:opacity-90 transition-opacity"
                 >
-                  <GithubIcon className="w-4 h-4" />
-                  使用 GitHub 登录
-                </button>
-                <button
-                  onClick={loginAsDemo}
-                  className="mt-2 w-full px-3 py-2.5 rounded-xl glass-button text-xs text-slate-600 dark:text-slate-200"
-                >
-                  以演示身份进入
-                </button>
+                  <LogIn className="w-4 h-4" />
+                  去登录 / 注册
+                </Link>
                 <p className="mt-3 text-[10px] leading-relaxed text-slate-400">
-                  后端未启动时，GitHub 登录不可用，可先用「演示身份」查看登录后的样子。
+                  注册后可以上传头像、加好友，记忆默认「好友可见」。
                 </p>
               </div>
             )}
@@ -247,12 +270,17 @@ export default function UserAvatar() {
           if (dragging.current) return;
           setOpen((v) => !v);
         }}
-        title={user ? `${user.login}（可拖动）` : "登录（可拖动）"}
+        title={me ? `${displayName}（可拖动）` : "登录 / 注册（可拖动）"}
+        aria-label={me ? "打开账号菜单" : "登录或注册"}
         className="w-11 h-11 rounded-full overflow-hidden border border-white/50 dark:border-white/15 bg-white/70 dark:bg-slate-800/70 backdrop-blur-md shadow-lg flex items-center justify-center"
       >
-        {user ? (
+        {me?.avatar ? (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={user.avatar} alt={user.login} className="w-full h-full object-cover" />
+          <img src={me.avatar} alt={displayName} className="w-full h-full object-cover" />
+        ) : me ? (
+          <span className="w-full h-full flex items-center justify-center bg-gradient-to-br from-cyan-400 to-indigo-500 text-white text-sm font-semibold">
+            {displayName.slice(0, 1)}
+          </span>
         ) : (
           <User className="w-5 h-5 text-slate-500 dark:text-slate-300" />
         )}

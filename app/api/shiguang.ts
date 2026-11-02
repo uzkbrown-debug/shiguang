@@ -1,9 +1,7 @@
-// 拾光数据访问层：优先请求后端（FastAPI），后端不可用时回退到本地演示数据
+// 拾光数据访问层：内容一律来自后端（FastAPI），不再回退本地演示数据
 // 前端通过 next.config.ts 的 rewrites 代理 /api/* -> http://127.0.0.1:8000
 
 import {
-  allImages,
-  memories as localMemories,
   locations as localLocations,
   persons as localPersons,
   type ShiguangMemory,
@@ -115,40 +113,6 @@ export async function backendAlive(): Promise<boolean> {
   return data?.status === "ok";
 }
 
-/** 本地回退：用演示数据拼出图片展示页需要的内容 */
-function localMediaPage(memoryId: string): MemoryMediaPage | null {
-  const memory = localMemories.find((m) => m.id === memoryId);
-  if (!memory) return null;
-
-  const idx = localMemories.findIndex((m) => m.id === memoryId);
-  const urls: string[] = [];
-  if (memory.cover) urls.push(memory.cover);
-  const start = idx % allImages.length;
-  for (let k = 0; k < 5; k++) {
-    const candidate = allImages[(start + k) % allImages.length];
-    if (!urls.includes(candidate)) urls.push(candidate);
-  }
-
-  return {
-    memory_id: memory.id,
-    title: memory.title,
-    summary: memory.summary,
-    happened_at: memory.happenedAt,
-    content: memory.content,
-    location_name: localLocations.find((l) => l.id === memory.locationId)?.name,
-    person_names: memory.personIds
-      .map((id) => localPersons.find((p) => p.id === id)?.name)
-      .filter((n): n is string => Boolean(n)),
-    tags: memory.tags,
-    photos: urls.map((url, i) => ({
-      id: i + 1,
-      url,
-      caption: `${memory.title} · ${i + 1}`,
-    })),
-    source: "local",
-  };
-}
-
 /** 某条记忆的图片展示页数据 */
 export async function fetchMemoryMedia(memoryId: string): Promise<MemoryMediaPage | null> {
   const remote = await getJSON<{
@@ -179,7 +143,7 @@ export async function fetchMemoryMedia(memoryId: string): Promise<MemoryMediaPag
     };
   }
 
-  return localMediaPage(memoryId);
+  return null;
 }
 
 /** 记忆列表（后端优先） */
@@ -192,22 +156,6 @@ export async function fetchMemories(params?: { year?: number; limit?: number }):
   query.set("limit", String(params?.limit ?? 200));
 
   const remote = await getJSON<MemoryBrief[]>(`/api/memories?${query.toString()}`);
-  if (remote && remote.length) {
-    return { items: remote, source: "backend" };
-  }
-
-  return {
-    items: localMemories.map((m) => ({
-      id: m.id,
-      title: m.title,
-      summary: m.summary,
-      happened_at: m.happenedAt,
-      location_id: m.locationId,
-      person_ids: m.personIds,
-      tags: m.tags,
-      cover: m.cover,
-      media_count: m.mediaCount,
-    })),
-    source: "local",
-  };
+  // 后端没有就是没有：不再回退本地演示数据，否则新账号会看到别人的记忆
+  return { items: remote ?? [], source: "backend" };
 }

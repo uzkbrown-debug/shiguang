@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
+import Link from "next/link";
 import {
   motion,
   useAnimationControls,
@@ -23,6 +24,7 @@ import {
   type YearGroup,
 } from "@/data/shiguang";
 import { fetchMemories, toShiguangMemory } from "@/app/api/shiguang";
+import { emitDataChanged, useDataChanged } from "@/lib/dataBus";
 
 // ── 河流几何 ─────────────────────────────────────────
 
@@ -56,7 +58,15 @@ type RiverItem =
   | { kind: "year"; key: string; year: number; group: YearGroup }
   | { kind: "memory"; key: string; year: number; memory: ShiguangMemory };
 
-export default function TimelineClient() {
+export default function TimelineClient({
+  refreshKey = 0,
+  onChanged,
+}: {
+  /** 外部数据变了（比如攻略被删）时自增，触发重新拉取 */
+  refreshKey?: number;
+  /** 这里删了一条记忆，通知外层刷新攻略/路线 */
+  onChanged?: (removedMemoryId: string) => void;
+} = {}) {
   const params = useSearchParams();
   const router = useRouter();
   const [detail, setDetail] = useState<ShiguangMemory | null>(null);
@@ -86,7 +96,17 @@ export default function TimelineClient() {
 
   useEffect(() => {
     loadMemories();
-  }, [loadMemories]);
+  }, [loadMemories, refreshKey]);
+
+  // 别处（地图、旅行页、上传页）改了数据，这里也跟着刷新
+  useDataChanged(
+    useCallback(
+      (change) => {
+        if (change.kind === "memory") loadMemories();
+      },
+      [loadMemories],
+    ),
+  );
 
   // 从别的页面（比如刚上传完）切回来时自动刷新
   useEffect(() => {
@@ -117,9 +137,12 @@ export default function TimelineClient() {
       setTimeout(() => {
         setMemories((list) => list.filter((m) => m.id !== id));
         setShatterId(null);
+        // 广播出去：地图、旅行页（攻略/路线）一起刷新
+        emitDataChanged({ kind: "memory", action: "deleted", id });
+        onChanged?.(id);
       }, 620);
     },
-    [],
+    [onChanged],
   );
 
   const onCardPointerDown = (id: string) => (e: React.PointerEvent) => {
@@ -389,7 +412,7 @@ export default function TimelineClient() {
         </div>
         <p className="text-sm md:text-base text-slate-500 dark:text-slate-400 ml-7 md:ml-10">
           归档 · 时光河流 · 共 {filtered.length} 段记忆
-          {dataSource && (
+          {dataSource && memories.length > 0 && (
             <span
               className={`ml-2 px-2 py-0.5 rounded-full text-[11px] ${
                 dataSource === "backend"
@@ -511,6 +534,25 @@ export default function TimelineClient() {
           ))}
         </div>
       </div>
+
+      {/* 空态：没有记忆就别画一条空河 */}
+      {filtered.length === 0 && (
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-16 text-center">
+          <p className="text-sm text-slate-500 dark:text-slate-400">
+            {memories.length === 0
+              ? "你的时间线还是空的，传一张照片它就会开始记录"
+              : "当前筛选下没有记忆，换个年份或关键词试试"}
+          </p>
+          {memories.length === 0 && (
+            <Link
+              href="/upload"
+              className="inline-flex items-center gap-1.5 mt-4 px-4 py-2 rounded-xl tech-btn text-white text-xs"
+            >
+              上传第一段记忆
+            </Link>
+          )}
+        </div>
+      )}
 
       {/* 时光河流 */}
       <div ref={riverRef} className="overflow-hidden pb-4 select-none">

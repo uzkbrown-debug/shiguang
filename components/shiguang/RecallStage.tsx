@@ -14,7 +14,7 @@ import {
   VolumeX,
   BookOpen,
 } from "lucide-react";
-import { buildRecall, buildRecallFrom, type RecallScene, type ShiguangPerson } from "@/data/shiguang";
+import { buildRecallFrom, type RecallScene, type ShiguangPerson } from "@/data/shiguang";
 import { fetchMemories, fetchLocations, toShiguangMemory } from "@/app/api/shiguang";
 
 const SCENE_DURATION = 6000;
@@ -58,10 +58,8 @@ export default function RecallStage({
     };
   }, [year]);
 
-  const scenes = useMemo<RecallScene[]>(
-    () => (remoteScenes && remoteScenes.length ? remoteScenes : buildRecall(year)),
-    [remoteScenes, year],
-  );
+  // 只用后端真实记忆搭场景；没有就是没有，不再拿本地演示数据冒充
+  const scenes = useMemo<RecallScene[]>(() => remoteScenes ?? [], [remoteScenes]);
   const [index, setIndex] = useState(0);
   // 照片幕：把这条记忆的所有照片取回来，叠着放；点开摊平，再点放大
   const [stackPhotos, setStackPhotos] = useState<{ url: string; kind?: string }[]>([]);

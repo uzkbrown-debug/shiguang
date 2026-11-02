@@ -8,16 +8,26 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 import city_coords
 import ingest
 import llm
 from config import MAX_VIDEO_MB
-from auth import optional_user
+from auth import current_user, optional_user
 from db import get_db
-from models import Location, Memory, MemoryMedia, MemoryPerson, Person, PersonRelation, User
+from models import (
+    Location,
+    Memory,
+    MemoryMedia,
+    MemoryPerson,
+    Person,
+    PersonRelation,
+    RoutePoint,
+    StoryScene,
+    User,
+)
 
 router = APIRouter(prefix="/api", tags=["记忆入库"])
 
@@ -287,7 +297,8 @@ def _random_guess_place(db: Session) -> Location | None:
 async def upload_memory(
     file: UploadFile | None = File(None),
     files: list[UploadFile] | None = File(None),
-    visibility: str = Form("friends"),
+    # 默认只有自己看得到：要给别人看，得自己改可见性
+    visibility: str = Form("private"),
     db: Session = Depends(get_db),
     viewer: User | None = Depends(optional_user),
 ):
@@ -338,6 +349,17 @@ async def upload_memory(
         raise HTTPException(400, "没有可用的文件")
 
     content = "\n\n".join(p for p in text_parts if p).strip()
+
+    # 同一张照片选了两次（或重复拖入）只留一份：否则两天里各挂一张一模一样的图，
+    # 而且两条记录共用一个 url，分天时怎么拖都分不开
+    seen_urls: set[str] = set()
+    deduped: list[dict] = []
+    for saved in saved_items:
+        if saved["url"] in seen_urls:
+            continue
+        seen_urls.add(saved["url"])
+        deduped.append(saved)
+    saved_items = deduped
 
     # 视频：本体留着可播放，另外抽关键帧当图片
     video_meta_list: list[dict] = []
@@ -415,7 +437,7 @@ async def upload_memory(
         ai_generated=False,
         tags="[]",
         user_id=viewer.id if viewer else "local",
-        visibility=visibility if visibility in ("private", "friends", "public") else "friends",
+        visibility=visibility if visibility in ("private", "friends", "public") else "private",
     )
 
     db.add(memory)
@@ -446,10 +468,22 @@ async def upload_memory(
 
 
 @router.get("/pending-memories")
-def list_pending(db: Session = Depends(get_db)):
-    """待分析列表：上传了但还没跑 AI 的记忆（跳过的那些）"""
+def list_pending(
+    db: Session = Depends(get_db),
+    viewer: User | None = Depends(optional_user),
+):
+    """待分析列表：只列「我自己」上传但还没跑 AI 的记忆
+
+    以前这里没有按用户过滤，新注册的账号会看到别人上传的待分析内容 —— 那是串号，
+    现在必须登录，并且只查自己的。
+    """
+    if viewer is None:
+        return {"count": 0, "items": []}
+
     rows = db.scalars(
-        select(Memory).where(Memory.ai_status == "pending").order_by(Memory.created_at.desc())
+        select(Memory)
+        .where(Memory.ai_status == "pending", Memory.user_id == viewer.id)
+        .order_by(Memory.created_at.desc())
     ).all()
 
     items = []
@@ -756,11 +790,18 @@ def analyze_memory(
 
 
 @router.patch("/memories/{memory_id}")
-def update_memory(memory_id: str, payload: MemoryUpdate, db: Session = Depends(get_db)):
-    """用户确认/修正后保存"""
+def update_memory(
+    memory_id: str,
+    payload: MemoryUpdate,
+    db: Session = Depends(get_db),
+    viewer=Depends(current_user),
+):
+    """用户确认/修正后保存：只能改自己的记忆"""
     memory = db.get(Memory, memory_id)
     if not memory:
         raise HTTPException(404, "记忆不存在")
+    if memory.user_id != viewer.id:
+        raise HTTPException(403, "只能改自己的记忆")
 
     if payload.title is not None:
         memory.title = payload.title
@@ -806,6 +847,9 @@ def update_memory(memory_id: str, payload: MemoryUpdate, db: Session = Depends(g
 
 class DayGroup(BaseModel):
     urls: list[str] = []
+    # 用户在「分天」这一步就填的主题和关键信息：给了就按它写，别让模型自己猜
+    title: str | None = None
+    notes: str | None = None
 
 
 class AnalyzeDaysBody(BaseModel):
@@ -819,7 +863,10 @@ def analyze_days(
     style: str = Query(llm.DEFAULT_STYLE),
     db: Session = Depends(get_db),
 ):
-    """按用户分好的天，各看各的照片，各写一段 —— 这样第 2、3 天不会是空的"""
+    """按用户分好的天，各看各的照片，各写一段；有标题就按标题写
+
+    单天失败（模型超时 / 图片读不出来）只让那一天留空，不要把整个请求打成 500。
+    """
     memory = db.get(Memory, memory_id)
     if not memory:
         raise HTTPException(404, "记忆不存在")
@@ -827,8 +874,9 @@ def analyze_days(
         row.url: row
         for row in db.scalars(select(MemoryMedia).where(MemoryMedia.memory_id == memory_id))
     }
+    total = len(body.days)
     out: list[dict] = []
-    for group in body.days:
+    for index, group in enumerate(body.days, start=1):
         paths: list[Path] = []
         for url in group.urls:
             row = rows.get(url)
@@ -837,24 +885,49 @@ def analyze_days(
             stored = _resolve_media(row.url)
             if stored and stored.suffix.lower() in ingest.IMAGE_EXT:
                 paths.append(stored)
-        fields = llm.generate_memory_fields(
-            {
-                "kind": "photo",
-                "photo_count": len(paths),
-                "user_notes": None,
-                "taken_at": memory.happened_at,
-                "location": None,
-            },
-            image_paths=paths[: llm.MAX_IMAGES],
-            style=style,
-        ) if paths else None
+
+        user_title = (group.title or "").strip()
+        user_notes = (group.notes or "").strip()
+
+        error: str | None = None
+        fields: dict | None = None
+        try:
+            if not paths:
+                error = "这天没有可读的照片"
+            else:
+                fields = llm.generate_memory_fields(
+                    {
+                        "kind": "photo",
+                        "photo_count": len(paths),
+                        # 只有用户补充的「关键信息」算事实；标题单独放进 day_title，
+                        # 否则模型会把标题当成必须发生的事，硬往照片上缝
+                        "user_notes": user_notes or None,
+                        "day_title": user_title or None,
+                        "day_index": index,
+                        "day_total": total,
+                        "taken_at": memory.happened_at,
+                        "location": None,
+                    },
+                    image_paths=paths[: llm.MAX_IMAGES],
+                    style=style,
+                )
+        except Exception as exc:  # noqa: BLE001
+            error = str(exc)[:200]
+            print(f"[analyze-days] 第 {index} 天失败:", exc)
+
         out.append(
             {
-                "title": (fields or {}).get("title"),
+                # 用户写了标题就以用户为准，别让模型改名
+                "title": user_title or (fields or {}).get("title"),
                 "content": (fields or {}).get("summary"),
                 "transport": (fields or {}).get("transport"),
                 "cost": None,
                 "costs": (fields or {}).get("costs") or [],
+                # 这段文字到底是照着哪几张图写的：前端拿它跟当前分组比对，
+                # 照片一换就对不上，界面立刻提示「照片变过，点重写」
+                "urls": [u for u in group.urls if u in rows],
+                "image_count": len(paths),
+                "error": error,
             }
         )
     return {"days": out}
@@ -862,7 +935,14 @@ def analyze_days(
 
 @router.delete("/memories/{memory_id}")
 def delete_memory(memory_id: str, db: Session = Depends(get_db)):
-    """删除记忆（同时清掉媒体记录与已上传的文件）"""
+    """删除记忆，并把所有指向它的引用一起清掉
+
+    - 媒体行与已上传文件：删
+    - 打卡记录 / 人物关联：外键 CASCADE 自动删
+    - 路线站点：保留站点，只把 memory_id 置空（站是行程，不能因为删记忆就丢）
+    - 故事分镜：从 story_scenes.memory_ids 里移除这个 id
+    地图点来自 memories，删完自动消失。
+    """
     memory = db.get(Memory, memory_id)
     if not memory:
         raise HTTPException(404, "记忆不存在")
@@ -874,9 +954,34 @@ def delete_memory(memory_id: str, db: Session = Depends(get_db)):
             if path.exists():
                 path.unlink(missing_ok=True)
 
+    # 路线站点：解除引用（站点本身留着）
+    unlinked = db.execute(
+        update(RoutePoint).where(RoutePoint.memory_id == memory_id).values(memory_id=None)
+    ).rowcount or 0
+
+    # 故事分镜：从 JSON 数组里摘掉
+    touched_scenes = 0
+    for scene in db.scalars(select(StoryScene)):
+        raw = scene.memory_ids or ""
+        if memory_id not in raw:
+            continue
+        try:
+            ids = json.loads(raw)
+        except Exception:  # noqa: BLE001
+            continue
+        if not isinstance(ids, list) or memory_id not in ids:
+            continue
+        kept = [str(i) for i in ids if str(i) != memory_id]
+        scene.memory_ids = json.dumps(kept, ensure_ascii=False) if kept else None
+        touched_scenes += 1
+
     db.delete(memory)
     db.commit()
-    return {"deleted": memory_id}
+    return {
+        "deleted": memory_id,
+        "unlinkedRoutePoints": unlinked,
+        "cleanedStoryScenes": touched_scenes,
+    }
 
 
 @router.delete("/memories/{memory_id}/media")

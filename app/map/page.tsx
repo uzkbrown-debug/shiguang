@@ -23,6 +23,7 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 import type { MapLine, MapPin as MapPinItem } from "@/components/shiguang/MemoryMap";
+import { useDataChanged } from "@/lib/dataBus";
 import {
   colorFor,
   fetchExplore,
@@ -79,7 +80,7 @@ function MapInner() {
   const [year, setYear] = useState("all");
   const [hiddenOwners, setHiddenOwners] = useState<Set<string>>(new Set());
   const [pickedPersons, setPickedPersons] = useState<Set<string>>(new Set());
-  const [q, setQ] = useState("");
+  const [q, setQ] = useState(params.get("q") ?? "");
   const [selected, setSelected] = useState<string | null>(null);
   const [focus, setFocus] = useState<{ lat: number; lng: number } | null>(null);
   const [cardTab, setCardTab] = useState<"guides" | "routes">("guides");
@@ -102,7 +103,9 @@ function MapInner() {
   }, [scope, year]);
 
   useEffect(() => {
-    load();
+    // 放到下一个 tick：避免在 effect 体里同步 setState（React 19 的规则）
+    const id = setTimeout(() => void load(), 0);
+    return () => clearTimeout(id);
   }, [load]);
 
   useEffect(() => {
@@ -112,6 +115,16 @@ function MapInner() {
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
   }, [load]);
+
+  // 记忆被删/新增时立刻重拉：地图上的点要跟着消失或出现，不用等切页面
+  useDataChanged(
+    useCallback(
+      (change) => {
+        if (change.kind === "memory") load();
+      },
+      [load],
+    ),
+  );
 
   const owners = data?.owners ?? [];
   const colorOf = useMemo(() => {
@@ -185,25 +198,29 @@ function MapInner() {
 
   // 选中就拉这条记忆的完整内容：地图抽屉要和攻略一个写法
   useEffect(() => {
-    if (!selected) {
-      setDetail(null);
-      return;
-    }
     let alive = true;
-    setDetailLoading(true);
-    fetch(`/api/memories/${selected}`, { cache: "no-store" })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        if (alive) setDetail(d as MemoryDetail | null);
-      })
-      .catch(() => {
-        if (alive) setDetail(null);
-      })
-      .finally(() => {
-        if (alive) setDetailLoading(false);
-      });
+    // 放到下一个 tick：避免在 effect 体里同步 setState（React 19 的规则）
+    const timer = setTimeout(() => {
+      if (!selected) {
+        setDetail(null);
+        return;
+      }
+      setDetailLoading(true);
+      fetch(`/api/memories/${selected}`, { cache: "no-store" })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          if (alive) setDetail(d as MemoryDetail | null);
+        })
+        .catch(() => {
+          if (alive) setDetail(null);
+        })
+        .finally(() => {
+          if (alive) setDetailLoading(false);
+        });
+    }, 0);
     return () => {
       alive = false;
+      clearTimeout(timer);
     };
   }, [selected]);
 
@@ -358,7 +375,7 @@ function MapInner() {
                 }`}
                 title={
                   value === "world"
-                    ? "包含陌生人公开分享的足迹"
+                    ? "全世界：陌生人的公开足迹 + 你自己的全部足迹"
                     : value === "all"
                       ? "我和我的好友"
                       : "只有我自己"
@@ -367,21 +384,12 @@ function MapInner() {
                 {label}
               </button>
             ))}
-            <button
-              onClick={() => {
-                setCardTab("routes");
-                setActiveGuide(null);
-                setActiveRouteId(null);
-              }}
-              className={`px-3 py-2 rounded-xl text-[11px] transition-colors glass-button text-slate-600 dark:text-slate-300`}
-            >
-              路线
-            </button>
           </div>
         </div>
 
-        {/* 筛选：默认只露一小条（我的 + 前几位好友 + 已生效条件），需要时再展开 */}
-        <div className="glass-card rounded-2xl border-white/40 dark:border-white/10 px-3 py-2.5 mb-3">
+        {/* 筛选面板只在「好友」档显示：只看我 / 全世界 不需要这些筛选 */}
+        {scope === "all" && (
+          <div className="glass-card rounded-2xl border-white/40 dark:border-white/10 px-3 py-2.5 mb-3">
           <div className="flex items-center gap-2 flex-wrap">
             <div className="flex items-center gap-1.5">
               {owners.slice(0, 6).map((o) => ownerChip(o, "sm"))}
@@ -526,6 +534,7 @@ function MapInner() {
             )}
           </AnimatePresence>
         </div>
+        )}
 
         {/* 地图 + 右侧详情 */}
         <div className="relative rounded-3xl overflow-hidden glass-card border-white/40 dark:border-white/10">
