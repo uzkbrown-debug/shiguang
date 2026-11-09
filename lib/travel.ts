@@ -142,6 +142,12 @@ export interface GuideBrief {
   route_id?: string | null;
   created_at?: string | null;
   photo_count?: number;
+  /** 点赞数 / 投币总数（所有账号一起算） */
+  likes?: number;
+  coins?: number;
+  /** 我自己赞过没有 / 我给这篇投了几枚 */
+  my_liked?: boolean;
+  my_coins?: number;
 }
 
 export interface GuideDayItem {
@@ -222,6 +228,26 @@ export function saveRoute(id: string | null, body: unknown) {
 
 export function deleteRoute(id: string) {
   return send<{ deleted: string }>("DELETE", `/api/routes/${id}`);
+}
+
+/** 攻略的赞 / 币结果 */
+export interface ReactionResult {
+  guide_id: string;
+  likes: number;
+  coins: number;
+  my_liked: boolean;
+  my_coins: number;
+  coin_balance: number;
+}
+
+/** 点赞 / 取消点赞（一个人对一篇只有一个赞） */
+export function toggleGuideLike(id: string) {
+  return send<ReactionResult>("POST", `/api/guides/${id}/like`);
+}
+
+/** 投币：一篇最多 2 枚，币从自己余额里扣 */
+export function giveGuideCoin(id: string, amount = 1) {
+  return send<ReactionResult>("POST", `/api/guides/${id}/coin`, { amount });
 }
 
 export function fetchGuides(params: { scope?: string; owner?: string; q?: string } = {}) {

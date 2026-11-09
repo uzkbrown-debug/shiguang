@@ -17,6 +17,13 @@ import {
 import type { MapLine, MapPin as MapPinItem } from "@/components/shiguang/MemoryMap";
 import FriendButton from "@/components/shiguang/FriendButton";
 import {
+  fetchRouteGeometry,
+  kmText,
+  polylineLength,
+  smoothCurve,
+  type RouteGeometry,
+} from "@/lib/routeGeometry";
+import {
   deleteRoute,
   fetchGuides,
   fetchRoute,
@@ -39,6 +46,32 @@ export default function RouteDetailPage({ params }: { params: Promise<{ id: stri
   const [myId, setMyId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // 路线小人：默认停着，点了才走（免得一进页面就动）
+  const [walking, setWalking] = useState(false);
+  const [atStop, setAtStop] = useState<number | null>(null);
+  // 沿真实道路的折线：后端已按站点坐标算好并缓存
+  const [geo, setGeo] = useState<RouteGeometry | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const t = setTimeout(() => {
+      void fetchRouteGeometry(id).then((g) => {
+        if (alive && g) setGeo(g);
+      });
+    }, 0);
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+  }, [id]);
+
+  // ?walk=1 直接开始走（方便录屏/截图，也方便分享「看这条线怎么走」）
+  useEffect(() => {
+    const want = new URLSearchParams(window.location.search).get("walk");
+    if (want !== "1") return;
+    const t = setTimeout(() => setWalking(true), 0);
+    return () => clearTimeout(t);
+  }, []);
 
   useEffect(() => {
     fetchMe().then((me) => setMyId(me?.id ?? null));
@@ -78,9 +111,19 @@ export default function RouteDetailPage({ params }: { params: Promise<{ id: stri
     ownerName: route.owner_nickname ?? route.owner_name ?? "某人",
     size: 26,
   }));
+  const stops = pins.map((p) => [p.lat, p.lng] as [number, number]);
+  const road = geo && geo.route_id === route.id && geo.points.length > 1 ? geo.points : null;
   const lines: MapLine[] =
     pins.length > 1
-      ? [{ id: route.id, color: "#facc15", positions: pins.map((p) => [p.lat, p.lng]), label: route.title }]
+      ? [
+          {
+            id: route.id,
+            color: "#facc15",
+            positions: road ?? smoothCurve(stops),
+            label: route.title,
+            dashed: !road,
+          },
+        ]
       : [];
 
   return (
@@ -189,12 +232,64 @@ export default function RouteDetailPage({ params }: { params: Promise<{ id: stri
         <div className="rounded-3xl overflow-hidden glass-card border-white/40 dark:border-white/10">
           <div style={{ aspectRatio: "16 / 9" }} className="relative">
             {pins.length ? (
-              <MemoryMap pins={pins} lines={lines} selectedId={null} onSelect={() => {}} />
+              <MemoryMap
+                pins={pins}
+                lines={lines}
+                selectedId={null}
+                onSelect={() => {}}
+                walker={{
+                  lineId: route.id,
+                  playing: walking,
+                  stopNames: route.points.map((p) => p.name),
+                  stops: route.points.map((p) => ({
+                    lat: p.latitude,
+                    lng: p.longitude,
+                    name: p.name,
+                  })),
+                }}
+                onWalkerStop={(i) => setAtStop(i)}
+                fitLine={
+                  lines[0] ? { id: lines[0].id, positions: lines[0].positions } : null
+                }
+              />
             ) : (
               <div className="w-full h-full flex items-center justify-center text-xs text-slate-400 bg-slate-900/50">
                 这条路线还没有坐标
               </div>
             )}
+            {/* 走一遍：小人沿路线走，到站停一下 */}
+            <div className="absolute right-3 top-3 z-[500] flex items-center gap-2">
+              {lines[0] && (
+                <span className="rounded-full bg-slate-950/70 px-2.5 py-1 text-[10.5px] text-slate-300 border border-white/15">
+                  {geo?.source === "amap"
+                    ? "沿真实道路"
+                    : geo?.source === "mixed"
+                      ? "部分沿道路"
+                      : "示意弧线"}
+                  <span className="mx-1 opacity-40">·</span>
+                  {kmText(polylineLength(lines[0].positions))}
+                </span>
+              )}
+              {atStop !== null && walking && route.points[atStop] && (
+                <span className="rounded-full bg-slate-950/75 px-2.5 py-1 text-[10.5px] text-amber-200 border border-amber-400/30">
+                  到 {route.points[atStop].name}
+                </span>
+              )}
+              <button
+                onClick={() => {
+                  setWalking((v) => !v);
+                  if (walking) setAtStop(null);
+                }}
+                className={
+                  "flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] border transition-colors " +
+                  (walking
+                    ? "bg-amber-400/20 border-amber-400/50 text-amber-200"
+                    : "bg-slate-950/70 border-white/20 text-slate-200 hover:border-amber-400/50 hover:text-amber-200")
+                }
+              >
+                {walking ? "⏸ 停下" : "▶ 走一遍"}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -209,7 +304,10 @@ export default function RouteDetailPage({ params }: { params: Promise<{ id: stri
             {route.points.map((p, i) => (
               <div
                 key={p.id ?? i}
-                className="relative glass-card rounded-2xl border-white/40 dark:border-white/10 p-4 pl-12"
+                className={
+                  "relative glass-card rounded-2xl border-white/40 dark:border-white/10 p-4 pl-12 transition-all " +
+                  (walking && atStop === i ? "ring-2 ring-amber-400/70 border-amber-400/50" : "")
+                }
               >
                 <span className="absolute left-4 top-4 w-5 h-5 rounded-full bg-amber-400 text-slate-900 text-[10px] flex items-center justify-center font-medium">
                   {i + 1}

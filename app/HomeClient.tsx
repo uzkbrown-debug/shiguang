@@ -12,7 +12,7 @@ import FadeIn from "@/components/ui/FadeIn";
 import MemoryDetail from "@/components/shiguang/MemoryDetail";
 import { profile, type ShiguangMemory } from "@/data/shiguang";
 import { fetchMemories, toShiguangMemory } from "@/app/api/shiguang";
-import { useMe } from "@/lib/session";
+import { patchMe, useMe } from "@/lib/session";
 
 const CloudPlayer = dynamic(() => import("@/components/music/CloudPlayer"), { ssr: false });
 const LyricBar = dynamic(() => import("@/components/music/LyricBar"), { ssr: false });
@@ -22,6 +22,8 @@ export default function HomeClient() {
   const [detail, setDetail] = useState<ShiguangMemory | null>(null);
   const [todayEcho, setTodayEcho] = useState<ShiguangMemory | null>(null);
   const [weather, setWeather] = useState<WeatherData | null>(null);
+  // 天气卡上手动选的城市（先管这一次显示，同时写回账号）
+  const [weatherCityPick, setWeatherCityPick] = useState<string | null>(null);
 
   // 今日回忆取「我自己最新的那条」，没有就空着（新账号本来就该是空的）
   useEffect(() => {
@@ -35,15 +37,24 @@ export default function HomeClient() {
   }, []);
 
   // 天气：后端代理 open-meteo，失败就保持 null（卡片显示占位）
+  // 城市优先用「天气卡自己选的那座」，没选过就按常驻城市
+  const weatherCity = weatherCityPick ?? me?.weather_city ?? me?.home_city ?? "泉州";
   useEffect(() => {
-    const city = me?.home_city || "泉州";
-    fetch(`/api/weather?city=${encodeURIComponent(city)}`, { cache: "no-store" })
+    fetch(`/api/weather?city=${encodeURIComponent(weatherCity)}`, { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => d && setWeather(d as WeatherData))
       .catch(() => {
         /* 没网就不显示 */
       });
-  }, [me?.home_city]);
+  }, [weatherCity]);
+
+  const changeWeatherCity = (city: string) => {
+    setWeatherCityPick(city);
+    // 存到账号上：换设备 / 下次打开还是这座城
+    void patchMe({ weather_city: city }).catch(() => {
+      /* 没登录或保存失败也不影响这次显示 */
+    });
+  };
 
   const stats = me?.stats;
   const memoryCount = stats?.memory_count ?? 0;
@@ -154,6 +165,8 @@ export default function HomeClient() {
               memoryCount={memoryCount}
               cityCount={cityCount}
               weather={weather}
+              weatherCity={weatherCity}
+              onWeatherCity={changeWeatherCity}
             />
           </FadeIn>
         </div>

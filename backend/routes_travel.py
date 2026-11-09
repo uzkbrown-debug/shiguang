@@ -5,12 +5,14 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import false, func, or_, select, update
+from sqlalchemy import delete, false, func, or_, select, update
 from sqlalchemy.orm import Session, selectinload
 
 from auth import can_view, current_user, friend_ids, optional_user, visible_owner_ids
 from db import get_db
 import city_coords
+import geo
+import reactions
 from models import (
     GuideDay,
     GuideMedia,
@@ -20,6 +22,7 @@ from models import (
     MemoryPerson,
     MemoryVisit,
     Person,
+    RouteGeometry,
     RoutePoint,
     TravelGuide,
     TravelRoute,
@@ -902,6 +905,63 @@ def get_route(route_id: str, db: Session = Depends(get_db), viewer: User | None 
     return route_full(route, db.get(User, route.user_id))
 
 
+@router.get("/routes/{route_id}/geometry")
+def get_route_geometry(
+    route_id: str,
+    mode: str = "driving",
+    refresh: int = 0,
+    db: Session = Depends(get_db),
+    viewer: User | None = Depends(optional_user),
+):
+    """这条路线「沿真实道路」的折线：先看缓存，没有才问高德，回来顺手存下
+
+    前端地图拿这组点画线、也拿它让小人走；拿不到（境外 / 没网）会返回
+    source="none"，前端自己退成平滑曲线，不至于空白。
+    """
+    mode = mode if mode in ("driving", "straight") else "driving"
+    route = db.scalar(
+        select(TravelRoute).options(selectinload(TravelRoute.points)).where(TravelRoute.id == route_id)
+    )
+    if not route:
+        raise HTTPException(404, "路线不存在")
+    if not can_view(db, viewer, route.user_id, route.visibility):
+        raise HTTPException(403, "这条路线没有对你开放")
+
+    stops = [
+        (p.latitude, p.longitude)
+        for p in route.points
+        if p.latitude is not None and p.longitude is not None
+    ]
+    base = {"route_id": route.id, "mode": mode, "stops": [p.name for p in route.points]}
+    if len(stops) < 2:
+        return {**base, "points": [], "distance_m": 0, "source": "none", "cached": False}
+
+    if mode == "straight":
+        points = [[float(a), float(b)] for a, b in stops]
+        return {
+            **base,
+            "points": points,
+            "distance_m": round(_straight_length(points), 1),
+            "source": "straight",
+            "cached": False,
+        }
+
+    signature = geo.signature_of(stops)
+    if not refresh:
+        cached = geo.load_cached(db, route.id, mode, signature)
+        if cached:
+            return {**base, **cached}
+
+    points, distance, source = geo.build_geometry(stops, mode)
+    if points:
+        geo.save_cached(db, route.id, mode, signature, points, distance, source)
+    return {**base, "points": points, "distance_m": distance, "source": source, "cached": False}
+
+
+def _straight_length(points: list[list[float]]) -> float:
+    return sum(geo.haversine(a, b) for a, b in zip(points, points[1:]))
+
+
 @router.patch("/routes/{route_id}")
 def update_route(
     route_id: str, body: RouteBody, db: Session = Depends(get_db), user: User = Depends(current_user)
@@ -937,6 +997,8 @@ def delete_route(route_id: str, db: Session = Depends(get_db), user: User = Depe
     db.execute(
         update(TravelGuide).where(TravelGuide.route_id == route_id).values(route_id=None)
     )
+    # 几何缓存是这条线专用的，路线没了就一起清掉
+    db.execute(delete(RouteGeometry).where(RouteGeometry.route_id == route_id))
     db.delete(route)
     db.commit()
     return {"deleted": route_id}
@@ -1033,7 +1095,9 @@ def list_guides(
         like = q.strip()
         rows = [g for g in rows if like in g.title or like in (g.destination or "") or like in (g.summary or "")]
     omap = _owner_map(db, {g.user_id for g in rows})
-    return [guide_brief(g, omap.get(g.user_id)) for g in rows]
+    return reactions.attach_stats(
+        db, [guide_brief(g, omap.get(g.user_id)) for g in rows], viewer.id if viewer else None
+    )
 
 
 @router.post("/guides")
@@ -1076,6 +1140,7 @@ def get_guide(guide_id: str, db: Session = Depends(get_db), viewer: User | None 
     if not can_view(db, viewer, guide.user_id, guide.visibility):
         raise HTTPException(403, "这篇攻略没有对你开放")
     data = guide_full(guide, db.get(User, guide.user_id))
+    reactions.attach_stats(db, [data], viewer.id if viewer else None)
     if guide.route_id:
         route = db.scalar(
             select(TravelRoute)
@@ -1084,6 +1149,42 @@ def get_guide(guide_id: str, db: Session = Depends(get_db), viewer: User | None 
         )
         data["route"] = route_full(route, db.get(User, route.user_id)) if route else None
     return data
+
+
+@router.post("/guides/{guide_id}/like")
+def toggle_guide_like(
+    guide_id: str, db: Session = Depends(get_db), user: User = Depends(current_user)
+):
+    """点赞 / 取消点赞（一个人对一篇只有一个赞）"""
+    guide = db.get(TravelGuide, guide_id)
+    if not guide:
+        raise HTTPException(404, "攻略不存在")
+    if not can_view(db, user, guide.user_id, guide.visibility):
+        raise HTTPException(403, "这篇攻略没有对你开放")
+    return reactions.toggle_like(db, guide, user)
+
+
+class CoinBody(BaseModel):
+    amount: int = 1
+
+
+@router.post("/guides/{guide_id}/coin")
+def give_guide_coin(
+    guide_id: str,
+    body: CoinBody | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """投币：一篇最多 2 枚，币从自己的余额里扣"""
+    guide = db.get(TravelGuide, guide_id)
+    if not guide:
+        raise HTTPException(404, "攻略不存在")
+    if not can_view(db, user, guide.user_id, guide.visibility):
+        raise HTTPException(403, "这篇攻略没有对你开放")
+    try:
+        return reactions.give_coins(db, guide, user, (body.amount if body else 1))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @router.patch("/guides/{guide_id}")

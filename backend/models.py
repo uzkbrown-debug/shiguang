@@ -171,7 +171,16 @@ class User(Base):
     salt: Mapped[str] = mapped_column(String(64))
     avatar: Mapped[str | None] = mapped_column(String(512))
     bio: Mapped[str | None] = mapped_column(Text)
+    # 主页横幅（个人页顶部那张大图）
+    banner: Mapped[str | None] = mapped_column(String(512))
+    # 主页正文：自己写的，支持极简 markdown（## 小标题 / - 列表 / > 引用 / **加粗**）
+    about: Mapped[str | None] = mapped_column(Text)
     home_city: Mapped[str | None] = mapped_column(String(64))
+    # 首页天气卡看哪座城市（空就用常驻城市）
+    weather_city: Mapped[str | None] = mapped_column(String(32))
+    # 硬币余额（给别人的攻略投币用），每天自动补几枚
+    coin_balance: Mapped[int] = mapped_column(Integer, default=0)
+    coin_day: Mapped[str | None] = mapped_column(String(10))
     # 密保问题（找回密码用）
     security_question: Mapped[str | None] = mapped_column(String(64))
     answer_hash: Mapped[str | None] = mapped_column(String(128))
@@ -358,3 +367,46 @@ class MediaComment(Base):
     audio_url: Mapped[str | None] = mapped_column(String(512))
     duration_ms: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class RouteGeometry(Base):
+    """路线的「真实道路折线」缓存（高德驾车规划的结果）
+
+    地图上一条线原来是站点直连，看着像直接飞过去。这里存一份沿公路的折线：
+    站点坐标一变（signature 跟着变），下次读就自动重算；坐标没动就直接拿缓存，
+    不重复请求高德。source 记这组点是怎么来的：amap 全段沿路 / mixed 部分沿路 /
+    none 一段都没拿到（境外或者没网，前端自己退到平滑曲线）。
+    """
+
+    __tablename__ = "route_geometry"
+
+    route_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("travel_routes.id", ondelete="CASCADE"), primary_key=True
+    )
+    mode: Mapped[str] = mapped_column(String(16), primary_key=True, default="driving")
+    signature: Mapped[str] = mapped_column(String(64), default="")
+    polyline: Mapped[str | None] = mapped_column(Text)  # JSON [[lat, lng], ...]
+    distance_m: Mapped[int | None] = mapped_column(Integer)
+    source: Mapped[str | None] = mapped_column(String(16))  # amap / mixed / none
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+
+class GuideReaction(Base):
+    """攻略的点赞 / 投币（一个人对一篇攻略只有一行）
+
+    点赞是开关；投币是「这个人一共给这篇投了几枚」（0~2，跟哔哩哔哩一样），
+    投出去的币从自己的余额里扣。计数按所有账号一起算，谁打开都看到同一个数。
+    """
+
+    __tablename__ = "guide_reactions"
+    __table_args__ = (UniqueConstraint("guide_id", "user_id", name="uq_guide_reaction"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    guide_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("travel_guides.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[str] = mapped_column(String(64), ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    liked: Mapped[int] = mapped_column(Integer, default=0)
+    coins: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)

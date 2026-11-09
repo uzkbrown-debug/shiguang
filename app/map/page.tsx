@@ -25,6 +25,13 @@ import {
 import type { MapLine, MapPin as MapPinItem } from "@/components/shiguang/MemoryMap";
 import { useDataChanged } from "@/lib/dataBus";
 import {
+  fetchRouteGeometry,
+  kmText,
+  polylineLength,
+  smoothCurve,
+  type RouteGeometry,
+} from "@/lib/routeGeometry";
+import {
   colorFor,
   fetchExplore,
   fetchGuides,
@@ -83,9 +90,8 @@ function MapInner() {
   const [q, setQ] = useState(params.get("q") ?? "");
   const [selected, setSelected] = useState<string | null>(null);
   const [focus, setFocus] = useState<{ lat: number; lng: number } | null>(null);
-  const [cardTab, setCardTab] = useState<"guides" | "routes">("guides");
-  const [activeGuide, setActiveGuide] = useState<GuideBrief | null>(null);
-  const [activeRouteId, setActiveRouteId] = useState<string | null>(null);
+  // ?route= 指定的路线（地图上直接画这条线并让小人走）
+  const activeRouteId = params.get("route");
   // 筛选面板默认收起：地图页顶部别堆那么多按钮
   const [filtersOpen, setFiltersOpen] = useState(false);
   // 选中光点时，拉这条记忆的完整内容（地图抽屉按攻略模板显示）
@@ -135,7 +141,7 @@ function MapInner() {
 
   const pointKey = (p: ExplorePoint) => p.memory_id;
 
-  // 组合筛选：归属者 + 人物 + 关键词 + 当前攻略
+  // 组合筛选：归属者 + 人物 + 关键词
   const visiblePoints = useMemo(() => {
     let list = data?.points ?? [];
     if (hiddenOwners.size) list = list.filter((p) => !hiddenOwners.has(p.owner_id));
@@ -149,14 +155,8 @@ function MapInner() {
           .includes(kw),
       );
     }
-    if (activeGuide) {
-      const gi = guides.find((g) => g.id === activeGuide.id);
-      const keys = [gi?.destination ?? "", gi?.title ?? ""].filter(Boolean);
-      list = list.filter((p) => keys.some((k) => k.includes(p.location_name) || p.location_name.includes(p.city ?? "###")));
-      if (!list.length) list = (data?.points ?? []).filter((p) => p.owner_id === activeGuide.user_id);
-    }
     return list;
-  }, [data, hiddenOwners, pickedPersons, q, activeGuide, guides]);
+  }, [data, hiddenOwners, pickedPersons, q]);
 
   const visibleKeys = useMemo(() => new Set(visiblePoints.map(pointKey)), [visiblePoints]);
 
@@ -195,6 +195,61 @@ function MapInner() {
     () => (data?.points ?? []).find((p) => pointKey(p) === selected) ?? null,
     [data, selected],
   );
+
+  // 选中底部某条路线时，把这条线画出来，并让小人沿着走
+  const activeRoute = useMemo(
+    () => (activeRouteId ? (data?.routes ?? []).find((r) => r.id === activeRouteId) ?? null : null),
+    [data, activeRouteId],
+  );
+
+  // 这条线的「沿真实道路」折线：后端算好并缓存，境外路线拿不到就退平滑弧线
+  const [geo, setGeo] = useState<RouteGeometry | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const id = activeRouteId;
+    // 放到下一个 tick：避免在 effect 体里同步 setState（React 19 的规则）
+    const timer = setTimeout(() => {
+      if (!id) {
+        setGeo(null);
+        return;
+      }
+      void fetchRouteGeometry(id).then((g) => {
+        if (alive && g && g.route_id === id) setGeo(g);
+      });
+    }, 0);
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, [activeRouteId]);
+
+  const routeLine = useMemo<MapLine | null>(() => {
+    if (!activeRoute || activeRoute.points.length < 2) return null;
+    const stops = activeRoute.points.map((p) => [p.latitude, p.longitude] as [number, number]);
+    const road =
+      geo && geo.route_id === activeRoute.id && geo.points.length > 1 ? geo.points : null;
+    return {
+      id: activeRoute.id,
+      color: "#facc15",
+      label: activeRoute.title,
+      // 有道路折线就用它；没有就用平滑弧线兜着，虚线表示「示意，不是实际路线」
+      positions: road ?? smoothCurve(stops),
+      dashed: !road,
+    };
+  }, [activeRoute, geo]);
+
+  const [walking, setWalking] = useState(false);
+  const [atStop, setAtStop] = useState<number | null>(null);
+
+  useEffect(() => {
+    // 换一条路线就重新开始：别让上一条的小人接着走
+    const t = setTimeout(() => {
+      setWalking(false);
+      setAtStop(null);
+    }, 0);
+    return () => clearTimeout(t);
+  }, [activeRouteId]);
 
   // 选中就拉这条记忆的完整内容：地图抽屉要和攻略一个写法
   useEffect(() => {
@@ -407,7 +462,6 @@ function MapInner() {
             {hiddenOwners.size > 0 && activeChip(`隐藏 ${hiddenOwners.size} 人`, () => setHiddenOwners(new Set()))}
             {pickedPersons.size > 0 && activeChip(`和谁 ${pickedPersons.size} 人`, () => setPickedPersons(new Set()))}
             {year !== "all" && activeChip(year, () => setYear("all"))}
-            {activeGuide && activeChip(`《${activeGuide.title}》`, () => setActiveGuide(null))}
 
             <div className="ml-auto flex items-center gap-2">
               <span className="hidden sm:flex items-center gap-1.5 text-[11px] text-slate-400">
@@ -522,7 +576,6 @@ function MapInner() {
                       setHiddenOwners(new Set());
                       setPickedPersons(new Set());
                       setYear("all");
-                      setActiveGuide(null);
                       setQ("");
                     }}
                     className="text-[10px] text-slate-400 hover:text-sky-500 transition-colors"
@@ -546,11 +599,62 @@ function MapInner() {
             ) : (
               <MemoryMap
                 pins={pins}
-                lines={[]}
+                lines={routeLine ? [routeLine] : []}
                 selectedId={selected}
                 onSelect={setSelected}
                 focus={focus}
+                walker={
+                  routeLine
+                    ? {
+                        lineId: routeLine.id,
+                        playing: walking,
+                        stopNames: activeRoute?.points.map((p) => p.name) ?? [],
+                        stops:
+                          activeRoute?.points.map((p) => ({
+                            lat: p.latitude,
+                            lng: p.longitude,
+                            name: p.name,
+                          })) ?? [],
+                      }
+                    : null
+                }
+                onWalkerStop={(i) => setAtStop(i)}
+                fitLine={routeLine ? { id: routeLine.id, positions: routeLine.positions } : null}
               />
+            )}
+
+            {/* 选中路线后：让小人沿线走一遍 */}
+            {routeLine && (
+              <div className="absolute right-3 top-3 z-[500] flex items-center gap-2">
+                <span className="rounded-full bg-slate-950/70 px-2.5 py-1 text-[10.5px] text-slate-300 border border-white/15">
+                  {geo?.source === "amap"
+                    ? "沿真实道路"
+                    : geo?.source === "mixed"
+                      ? "部分沿道路"
+                      : "示意弧线"}
+                  <span className="mx-1 opacity-40">·</span>
+                  {kmText(polylineLength(routeLine.positions))}
+                </span>
+                {walking && atStop !== null && activeRoute?.points[atStop] && (
+                  <span className="rounded-full bg-slate-950/75 px-2.5 py-1 text-[10.5px] text-amber-200 border border-amber-400/30">
+                    到 {activeRoute.points[atStop].name}
+                  </span>
+                )}
+                <button
+                  onClick={() => {
+                    setWalking((v) => !v);
+                    if (walking) setAtStop(null);
+                  }}
+                  className={
+                    "flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[11px] border transition-colors " +
+                    (walking
+                      ? "bg-amber-400/20 border-amber-400/50 text-amber-200"
+                      : "bg-slate-950/70 border-white/20 text-slate-200 hover:border-amber-400/50 hover:text-amber-200")
+                  }
+                >
+                  {walking ? "⏸ 停下" : "▶ 让小人走一遍"}
+                </button>
+              </div>
             )}
 
             {/* 图例 */}
@@ -825,120 +929,6 @@ function MapInner() {
               </motion.aside>
             )}
           </AnimatePresence>
-        </div>
-
-        {/* 底部横滑卡片：攻略 / 路线（像 anitabi 底部的作品条） */}
-        <div className="mt-3">
-          <div className="flex items-center gap-2 mb-2">
-            {(
-              [
-                ["guides", "攻略", BookOpen],
-                ["routes", "路线", RouteIcon],
-              ] as ["guides" | "routes", string, typeof BookOpen][]
-            ).map(([key, label, Icon]) => (
-              <button
-                key={key}
-                onClick={() => {
-                  setCardTab(key);
-                  setActiveGuide(null);
-                }}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] transition-colors ${
-                  cardTab === key
-                    ? "bg-slate-800 text-white dark:bg-white dark:text-slate-900"
-                    : "glass-button text-slate-600 dark:text-slate-300"
-                }`}
-              >
-                <Icon className="w-3.5 h-3.5" />
-                {label}
-              </button>
-            ))}
-            {activeGuide && (
-              <button
-                onClick={() => setActiveGuide(null)}
-                className="px-3 py-1.5 rounded-xl text-[11px] bg-emerald-500/15 text-emerald-600 dark:text-emerald-300"
-              >
-                正在看《{activeGuide.title}》✕
-              </button>
-            )}
-            <span className="ml-auto text-[10px] text-slate-400">
-              {visiblePoints.length} 个点在地图上 · 点卡片可按攻略聚焦
-            </span>
-          </div>
-
-          <div className="flex gap-3 overflow-x-auto pb-2">
-            {cardTab === "guides"
-              ? guides.map((g) => (
-                  <button
-                    key={g.id}
-                    onClick={() => setActiveGuide(activeGuide?.id === g.id ? null : g)}
-                    className={`shrink-0 w-56 rounded-2xl overflow-hidden text-left glass-card border transition-colors ${
-                      activeGuide?.id === g.id ? "border-emerald-400" : "border-white/40 dark:border-white/10"
-                    }`}
-                  >
-                    <div className="h-24 bg-slate-800 relative">
-                      {g.cover ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img src={g.cover} alt="" className="w-full h-full object-cover" />
-                      ) : null}
-                      <span className="absolute left-2 top-2 flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-950/70 text-[10px] text-white">
-                        <span
-                          className="w-2 h-2 rounded-full"
-                          style={{ background: colorOf.get(g.user_id) ?? "#34d399" }}
-                        />
-                        {g.owner_name ?? "某人"}
-                      </span>
-                    </div>
-                    <div className="p-3">
-                      <p className="text-xs font-medium text-slate-800 dark:text-slate-100 line-clamp-1">
-                        {g.title}
-                      </p>
-                      <p className="mt-1 text-[10px] text-slate-400">
-                        {g.destination ?? "—"} · {g.day_count} 天
-                        {g.budget ? ` · ${g.budget}` : ""}
-                      </p>
-                    </div>
-                  </button>
-                ))
-              : (data?.routes ?? []).map((r) => (
-                  <button
-                    key={r.id}
-                    onClick={() => {
-                      const first = r.points[0];
-                      if (first) setFocus({ lat: first.latitude, lng: first.longitude });
-                      setActiveRouteId(activeRouteId === r.id ? null : r.id);
-                    }}
-                    className={`shrink-0 w-56 rounded-2xl glass-card border p-3 text-left transition-colors ${
-                      activeRouteId === r.id
-                        ? "border-amber-400"
-                        : "border-white/40 dark:border-white/10"
-                    }`}
-                  >
-                    <p className="flex items-center gap-1.5 text-xs font-medium text-slate-800 dark:text-slate-100">
-                      <span
-                        className="w-2 h-2 rounded-full"
-                        style={{ background: colorOf.get(r.user_id) ?? "#facc15" }}
-                      />
-                      <span className="truncate">{r.title}</span>
-                    </p>
-                    <p className="mt-1.5 text-[10px] text-slate-500 dark:text-slate-400 line-clamp-2">
-                      {r.points.map((p) => p.name).join(" → ")}
-                    </p>
-                    <p className="mt-1 text-[10px] text-slate-400">
-                      {r.owner_nickname ?? r.owner_name ?? "某人"} · {r.points.length} 站
-                      {r.start_date ? ` · ${r.start_date} 起` : ""}
-                    </p>
-                  </button>
-                ))}
-            {((cardTab === "guides" && guides.length === 0) ||
-              (cardTab === "routes" && (data?.routes?.length ?? 0) === 0)) && (
-              <p className="py-6 text-[11px] text-slate-400">
-                还没有{cardTab === "guides" ? "攻略" : "路线"}。
-                <Link href="/travel" className="text-emerald-500 hover:underline ml-1">
-                  去旅行页写一个
-                </Link>
-              </p>
-            )}
-          </div>
         </div>
 
         {!point && !loading && (

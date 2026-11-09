@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import { motion, AnimatePresence, useMotionValue } from "framer-motion";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
-import { Sparkles, X, Send, ArrowRight, ShieldCheck, Mic, Volume2, VolumeX, MapPin, CheckCircle2, Compass } from "lucide-react";
+import { Sparkles, X, Send, ArrowRight, ShieldCheck, Mic, Volume2, VolumeX, MapPin, CheckCircle2, Compass, ImagePlus } from "lucide-react";
 
 // 浏览器语音识别（Web Speech API）的最小类型声明
 interface SpeechRecognitionLike {
@@ -25,6 +25,8 @@ interface SpeechRecognitionLike {
 }
 
 const SPEAK_KEY = "xiaoshi_auto_speak";
+
+import { lookupSpotByPhoto, spotHeadline, type SpotResult } from "@/lib/spotSearch";
 import {
   askAssistant,
   assistantSamples,
@@ -39,6 +41,10 @@ interface Turn {
   text: string;
   result?: AssistantAnswer;
   source?: "deepseek" | "local";
+  /** 看图找帖子的结果 */
+  spot?: SpotResult;
+  /** 用户传的那张图（本地预览） */
+  image?: string;
 }
 
 const BALL_POS_KEY = "xiaoshi_ball_pos";
@@ -71,12 +77,16 @@ export default function XiaoshiAI() {
   const [listening, setListening] = useState(false);
   const [voiceError, setVoiceError] = useState("");
   const [speakReplies, setSpeakReplies] = useState(false);
+  const [spotBusy, setSpotBusy] = useState(false);
+  const spotInputRef = useRef<HTMLInputElement | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const finalTextRef = useRef("");
 
   // 记住「自动朗读」开关
   useEffect(() => {
-    setSpeakReplies(localStorage.getItem(SPEAK_KEY) === "1");
+    // 放到下一个 tick：避免在 effect 体里同步 setState（React 19 的规则）
+    const t = window.setTimeout(() => setSpeakReplies(localStorage.getItem(SPEAK_KEY) === "1"), 0);
+    return () => window.clearTimeout(t);
   }, []);
 
   // 卸载时停掉语音
@@ -198,7 +208,8 @@ export default function XiaoshiAI() {
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    setMounted(true);
+    const t = window.setTimeout(() => setMounted(true), 0);
+    return () => window.clearTimeout(t);
   }, []);
   // 面板贴着球展开：球在右半边就从右边弹出，在左半边就从左边弹出
   const [panelPos, setPanelPos] = useState<{ side: "left" | "right"; bottom: number }>({
@@ -255,6 +266,31 @@ export default function XiaoshiAI() {
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [turns, open]);
+
+  /** 传一张旅游照片：认景点，再把站内相关帖子推出来 */
+  const pickSpotPhoto = () => spotInputRef.current?.click();
+
+  const handleSpotPhoto = async (file: File | null) => {
+    if (!file || spotBusy) return;
+    const preview = URL.createObjectURL(file);
+    setTurns((prev) => [...prev, { role: "user", text: "这张照片是哪儿？有相关帖子吗", image: preview }]);
+    setSpotBusy(true);
+    setThinking(true);
+    try {
+      const data = await lookupSpotByPhoto(file);
+      if (!data) {
+        setTurns((prev) => [...prev, { role: "ai", text: "服务没响应，稍后再试一次。" }]);
+        return;
+      }
+      setTurns((prev) => [...prev, { role: "ai", text: spotHeadline(data), spot: data }]);
+    } catch {
+      setTurns((prev) => [...prev, { role: "ai", text: "图片没传上去，重试一次？" }]);
+    } finally {
+      setSpotBusy(false);
+      setThinking(false);
+      if (spotInputRef.current) spotInputRef.current.value = "";
+    }
+  };
 
   const send = async (q: string) => {
     const question = q.trim();
@@ -492,12 +528,66 @@ export default function XiaoshiAI() {
                 return (
                 <div key={i} className={t.role === "user" ? "text-right" : ""}>
                   {t.role === "user" ? (
-                    <span className="inline-block max-w-[85%] px-3.5 py-2 rounded-2xl bg-sky-500 text-white text-xs text-left">
-                      {t.text}
+                    <span className="inline-block max-w-[85%] text-right">
+                      {t.image && (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={t.image}
+                          alt=""
+                          className="mb-1 ml-auto block max-h-40 w-auto max-w-full rounded-2xl border border-white/20 object-cover"
+                        />
+                      )}
+                      <span className="inline-block px-3.5 py-2 rounded-2xl bg-sky-500 text-white text-xs text-left">
+                        {t.text}
+                      </span>
                     </span>
                   ) : (
                     <div className="space-y-3">
                       <p className="text-xs text-slate-700 dark:text-slate-200 leading-relaxed">{t.text}</p>
+
+                      {/* 站内没有这个景点的帖子时，至少把景点讲清楚 */}
+                      {t.spot?.ok && t.spot.intro && (
+                        <p className="rounded-xl bg-emerald-500/10 px-2.5 py-2 text-[11px] leading-relaxed text-slate-600 dark:text-slate-300">
+                          {t.spot.intro}
+                        </p>
+                      )}
+
+                      {/* 看图找帖子：识别结果 + 站内相关帖子 */}
+                      {t.spot?.ok && !!t.spot.hits?.length && (
+                        <div className="space-y-2">
+                          <div className="flex items-center gap-1.5 text-[10px] text-emerald-600 dark:text-emerald-400">
+                            <ImagePlus className="w-3 h-3" />
+                            站内相关帖子 · {t.spot.hits.length} 条
+                          </div>
+                          {t.spot.hits.map((h) => (
+                            <Link
+                              key={`${h.kind}-${h.id}`}
+                              href={h.link}
+                              onClick={() => setOpen(false)}
+                              className="group flex items-center gap-2.5 rounded-xl bg-white/50 dark:bg-white/5 px-2.5 py-2 hover:ring-1 hover:ring-emerald-400/50 transition-all"
+                            >
+                              {h.cover ? (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img src={h.cover} alt="" className="w-12 h-12 rounded-lg object-cover shrink-0" />
+                              ) : (
+                                <span className="w-12 h-12 rounded-lg bg-slate-400/30 shrink-0" />
+                              )}
+                              <span className="min-w-0 flex-1">
+                                <span className="block text-[11px] text-slate-700 dark:text-slate-200 truncate">
+                                  {h.title}
+                                </span>
+                                <span className="block text-[10px] text-slate-400 truncate">
+                                  {h.kind === "memory" ? "记忆" : h.kind === "guide" ? "攻略" : "路线"}
+                                  {h.owner ? ` · ${h.owner}` : ""}
+                                  {h.reason ? ` · ${h.reason}` : ""}
+                                </span>
+                              </span>
+                              <ArrowRight className="w-3 h-3 shrink-0 text-emerald-500 transition-transform group-hover:translate-x-0.5" />
+                            </Link>
+                          ))}
+                        </div>
+                      )}
+
                       {t.source && (
                         <div className="flex items-center gap-1 text-[10px] text-slate-400">
                           <Sparkles className="w-2.5 h-2.5" />
@@ -744,6 +834,28 @@ export default function XiaoshiAI() {
                 >
                   <Mic className="w-4 h-4" />
                 </button>
+                <button
+                  type="button"
+                  onClick={pickSpotPhoto}
+                  disabled={spotBusy}
+                  title="传一张旅游照片，小拾认景点并推荐站内帖子"
+                  className={`p-2.5 rounded-xl transition-colors disabled:opacity-50 ${
+                    spotBusy ? "bg-emerald-500 text-white" : "glass-button text-slate-600 dark:text-slate-200"
+                  }`}
+                >
+                  {spotBusy ? (
+                    <span className="block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    <ImagePlus className="w-4 h-4" />
+                  )}
+                </button>
+                <input
+                  ref={spotInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => void handleSpotPhoto(e.target.files?.[0] ?? null)}
+                />
                 <input
                   ref={inputRef}
                   value={input}

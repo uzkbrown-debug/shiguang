@@ -15,6 +15,7 @@ import {
   ArrowRight,
   Compass,
   Clock,
+  Coins,
 } from "lucide-react";
 import {
   colorFor,
@@ -31,6 +32,7 @@ import { emitDataChanged, useDataChanged } from "@/lib/dataBus";
 import TimelineClient from "@/app/timeline/TimelineClient";
 import FlameTrashZone from "@/components/shiguang/FlameTrashZone";
 import PolaroidCard from "@/components/shiguang/PolaroidCard";
+import GuideReactions from "@/components/shiguang/GuideReactions";
 
 /** 2026-11-01T20:14:02 → 2026年11月1日 */
 function cnDate(raw?: string | null): string {
@@ -71,9 +73,14 @@ function TravelInner() {
   const [toast, setToast] = useState<string | null>(null);
   // 三个视图（攻略 / 路线 / 时间轴）共用一批内容，任一处删了都要一起刷新
   const [dataVersion, setDataVersion] = useState(0);
+  // 我的硬币余额（投币从这里扣）
+  const [coinBalance, setCoinBalance] = useState<number | null>(null);
 
   useEffect(() => {
-    fetchMe().then((me) => setMyId(me?.id ?? null));
+    fetchMe().then((me) => {
+      setMyId(me?.id ?? null);
+      setCoinBalance(me?.coin_balance ?? null);
+    });
   }, []);
 
   useEffect(() => {
@@ -281,6 +288,16 @@ function TravelInner() {
                 {label}
               </button>
             ))}
+            {/* 我的硬币：投给别人的币从这里扣，每天补 5 枚 */}
+            {coinBalance != null && (
+              <span
+                className="ml-auto flex items-center gap-1 px-2.5 py-1 rounded-full bg-amber-400/15 text-[11px] text-amber-600 dark:text-amber-300"
+                title="给攻略投币用；每天自动补 5 枚，上限 100"
+              >
+                <Coins className="w-3 h-3" />
+                我有 {coinBalance} 枚
+              </span>
+            )}
           </div>
         </div>
 
@@ -374,6 +391,20 @@ function TravelInner() {
                           tone="dark"
                         />
                       </Link>
+                      {/* 赞 / 币放在 Link 外面：不然点一下会顺带跳进攻略 */}
+                      <div className="mt-2 flex justify-end pr-1">
+                        <div className="flex items-center rounded-full bg-white/75 dark:bg-slate-900/50 border border-white/70 dark:border-white/10 shadow-sm px-2.5 py-1">
+                          <GuideReactions
+                            guideId={g.id}
+                            likes={g.likes}
+                            coins={g.coins}
+                            myLiked={g.my_liked}
+                            myCoins={g.my_coins}
+                            compact
+                            onBalance={setCoinBalance}
+                          />
+                        </div>
+                      </div>
                     </div>
                   </motion.div>
                 ))}

@@ -19,6 +19,7 @@ import {
   MessageSquare,
 } from "lucide-react";
 import FriendButton from "@/components/shiguang/FriendButton";
+import GuideReactions from "@/components/shiguang/GuideReactions";
 import PhotoDanmaku from "@/components/shiguang/PhotoDanmaku";
 import DanmakuDock from "@/components/shiguang/DanmakuDock";
 import { DEFAULT_SETTINGS, loadSettings, saveSettings, type DanmakuSettings } from "@/components/shiguang/DanmakuSettings";
@@ -245,6 +246,15 @@ export default function GuideDetailPage({ params }: { params: Promise<{ id: stri
               {VISIBILITY_LABEL[guide.visibility] ?? "好友可见"}
             </span>
           </div>
+          {/* 赞 / 币：所有账号一起计数，投出去的币从自己余额里扣 */}
+          <div className="mt-3 flex items-center gap-4 rounded-xl bg-slate-950/45 backdrop-blur px-3 py-1.5 w-fit">
+            <GuideReactions
+              guideId={guide.id}
+              likes={guide.likes}
+              coins={guide.coins}
+              myLiked={guide.my_liked}
+              myCoins={guide.my_coins}
+            />          </div>
         </div>
       </div>
 

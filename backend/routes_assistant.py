@@ -2,12 +2,17 @@
 import re
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException
+import shutil
+import tempfile
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 import llm
+import spot_guide
 from auth import can_view, optional_user
 from db import get_db
 from models import GuideDay, Location, Memory, MemoryPerson, MemoryVisit, Person, TravelGuide, User
@@ -669,3 +674,86 @@ def assistant_guide_map(payload: GuideMapIn, db: Session = Depends(get_db)):
     except Exception as exc:  # noqa: BLE001
         print("[assistant] guide-map 失败:", exc)
         return {"guideIds": {}}
+
+
+# ---------- 看图找帖子：识别景点 → 站内推荐 ----------
+
+@router.post("/assistant/spot")
+async def assistant_spot(
+    image: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    viewer: User | None = Depends(optional_user),
+):
+    """传一张旅游照片：认出景点，再把站内相关帖子推给用户。
+
+    优先级：同景点（+ 同城其它）→ 同城 → 省内其它城市 → 没有就直说。
+    """
+    if not image.filename:
+        raise HTTPException(400, "没有收到图片")
+    suffix = Path(image.filename).suffix.lower() or ".jpg"
+    if suffix not in {".jpg", ".jpeg", ".png", ".webp", ".heic", ".bmp"}:
+        raise HTTPException(400, "这个格式看不了，换 jpg/png 试试")
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix="spot_"))
+    tmp_path = tmp_dir / f"upload{suffix}"
+    try:
+        with tmp_path.open("wb") as fh:
+            shutil.copyfileobj(image.file, fh)
+        if tmp_path.stat().st_size > 12 * 1024 * 1024:
+            raise HTTPException(413, "图片太大了，压到 12MB 以内")
+
+        spot_info = llm.identify_spot(tmp_path)
+        if not spot_info:
+            return {
+                "ok": False,
+                "reason": "llm" if llm.available() else "no-key",
+                "message": "这张图我认不出是哪儿，换个角度或换张清楚点的试试。",
+                "spot": None,
+                "hits": [],
+            }
+
+        city = spot_info.get("city", "") or ""
+        province = spot_info.get("province", "") or ""
+
+        # ① 先按模型直接给的景点找站内帖子
+        result = spot_guide.find_posts(db, viewer, spot_info.get("spot", ""), city, province)
+        source = "model"
+
+        # ② 模型没认出景点：拿候选地名 + 画面关键词去网上搜一圈，把景点名抠出来再找
+        if result["level"] == "none" or not result["hits"]:
+            names: list[str] = []
+            for cand in spot_info.get("candidates") or []:
+                if cand and cand not in names:
+                    names.append(cand)
+            try:
+                import websearch
+
+                for title in websearch.guess_spots(spot_info.get("keywords") or [], city):
+                    if title not in names:
+                        names.append(title)
+            except Exception as exc:  # 网络搜索失败不影响主流程
+                print("[spot] websearch skip:", exc)
+
+            for name in names[:12]:
+                hit = spot_guide.find_posts(db, viewer, name, city, province)
+                if hit["hits"]:
+                    hit["matched_by"] = name
+                    result, source = hit, "web"
+                    break
+
+        # 站内没有这个景点的帖子时，至少把景点本身讲清楚（不能只说"这是北京"）
+        intro = None
+        spot_name = spot_info.get("spot") or ""
+        if result.get("level") != "spot" and spot_name:
+            intro = llm.describe_spot(spot_name, city, province)
+
+        return {
+            "ok": True,
+            "spot": spot_info,
+            "province": spot_guide.province_of(city, province) or province,
+            "source": source,
+            "intro": intro,
+            **result,
+        }
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)

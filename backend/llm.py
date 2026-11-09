@@ -495,3 +495,171 @@ def generate_memory_fields(
     except Exception as exc:
         print("[DeepSeek] generate failed:", exc)
         return None
+
+
+SPOT_PROMPT = """你是旅游照片的地点识别器，服务对象在中国，绝大多数照片拍的是中国境内。
+
+步骤（不要输出过程，只用于你自己判断）：
+1. 先看画面里的硬线索：地标外形、城楼/城墙/塔/桥/宫殿样式、店招和路牌文字、文字字体、车牌、地貌（丹霞、喀斯特、草原、戈壁）、植被、建筑风格
+2. 再判断这是哪一处景点：像八达岭长城、故宫、兵马俑、西湖、鼓浪屿、张家界、九寨沟、布达拉宫、泰山、黄山这类国家级景点，只要是就一定要报出来，不要含糊
+3. 不确定具体景点就给最可能的候选，并且给出所在城市（城市通常比景点更容易判断）
+
+只输出一个 JSON，不要解释、不要代码块：
+{"spot":"最可能的具体景点名，认不出就给空字符串",
+ "city":"所在城市，例如「北京」「厦门」",
+ "province":"所在省份/地区，例如「北京市」「福建省」",
+ "country":"国家",
+ "candidates":["其它可能的地名或景点名，最多 3 个，按可能性排序"],
+ "keywords":["画面特征词 2-4 个，例如「砖石城墙」「烽火台」「山脊」"],
+ "confidence":0.0 到 1.0}
+
+宁可给候选，也不要全空。"""
+
+
+def identify_spot(image_path: Path) -> dict | None:
+    """看图认出这是哪儿的景点。识别不出来就返回 None（不编造）"""
+    if not available():
+        return None
+    data_url = encode_image(image_path, max_side=1600)
+    if not data_url:
+        return None
+    try:
+        from openai import OpenAI
+
+        client = OpenAI(api_key=DEEPSEEK_API_KEY.strip(), base_url=DEEPSEEK_BASE_URL, timeout=90)
+        response = client.chat.completions.create(
+            model=DEEPSEEK_MODEL,
+            messages=[
+                {"role": "system", "content": SPOT_PROMPT},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": data_url}},
+                        {"type": "text", "text": "这张照片拍的是哪儿？只返回 JSON。"},
+                    ],
+                },
+            ],
+            temperature=0.1,
+            max_tokens=700,
+        )
+        raw = response.choices[0].message.content or ""
+        data = _extract_json(raw)
+        if not data:
+            print("[DeepSeek] spot json parse failed:", raw[:200])
+            return None
+        def _list(key: str, limit: int) -> list[str]:
+            raw = data.get(key) or []
+            if isinstance(raw, str):
+                raw = [raw]
+            if not isinstance(raw, list):
+                return []
+            out_list: list[str] = []
+            for v in raw:
+                text = str(v).strip()
+                if text and text not in out_list:
+                    out_list.append(text)
+                if len(out_list) >= limit:
+                    break
+            return out_list
+
+        out = {
+            "spot": str(data.get("spot") or "").strip(),
+            "city": str(data.get("city") or "").strip(),
+            "province": str(data.get("province") or "").strip(),
+            "country": str(data.get("country") or "").strip(),
+            "candidates": _list("candidates", 3),
+            "keywords": _list("keywords", 4),
+        }
+        try:
+            out["confidence"] = float(data.get("confidence") or 0)
+        except (TypeError, ValueError):
+            out["confidence"] = 0.0
+        if out["spot"] or out["city"]:
+            return out
+
+        # 第一次全空：给一句更硬的追问再试一次（很多"认不出"其实是模型太保守）
+        retry = client.chat.completions.create(
+            model=DEEPSEEK_MODEL,
+            messages=[
+                {"role": "system", "content": SPOT_PROMPT},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": data_url}},
+                        {
+                            "type": "text",
+                            "text": (
+                                "再仔细看一遍。这是中国境内的旅游照片，"
+                                "请至少给出所在城市（哪怕只是猜），并列出 3 个最可能的景点名。只返回 JSON。"
+                            ),
+                        },
+                    ],
+                },
+            ],
+            temperature=0.1,
+            max_tokens=700,
+        )
+        raw2 = retry.choices[0].message.content or ""
+        data2 = _extract_json(raw2) or {}
+        for key in ("spot", "city", "province", "country"):
+            if not out.get(key):
+                out[key] = str(data2.get(key) or "").strip()
+        if not out.get("candidates"):
+            cand = data2.get("candidates") or []
+            if isinstance(cand, list):
+                out["candidates"] = [str(c).strip() for c in cand if str(c).strip()][:3]
+        if not out.get("keywords"):
+            kw = data2.get("keywords") or []
+            if isinstance(kw, list):
+                out["keywords"] = [str(k).strip() for k in kw if str(k).strip()][:4]
+
+        if not (out["spot"] or out["city"]):
+            return None
+        return out
+    except Exception as exc:
+        print("[DeepSeek] identify_spot failed:", exc)
+        return None
+
+
+SPOT_INTRO_PROMPT = """你是旅行编辑。用 2–3 句中文介绍一个景点，写给第一次听说它的人：
+它是什么/有什么来历、在哪儿、最值得看的是什么、什么季节或时段去最好。
+
+要求：
+- 只写确定的事实，不要编造门票价格、开放时间、具体电话
+- 不要用"欢迎来到""赶紧收藏"这类营销口吻
+- 不要分点，不要标题，直接一段话，120 字以内"""
+
+
+def describe_spot(spot: str, city: str = "", province: str = "") -> str | None:
+    """给一个景点写两句介绍，站内没有它的帖子时用来垫场"""
+    name = (spot or "").strip()
+    if not name or not available():
+        return None
+    where = "、".join(x for x in (city, province) if x)
+    try:
+        from openai import OpenAI
+
+        client = OpenAI(api_key=DEEPSEEK_API_KEY.strip(), base_url=DEEPSEEK_BASE_URL, timeout=60)
+        user_msg = f"景点：{name}" + (f"（位于{where}）" if where else "")
+
+        def _once(budget: int) -> str:
+            resp = client.chat.completions.create(
+                model=DEEPSEEK_MODEL,
+                messages=[
+                    {"role": "system", "content": SPOT_INTRO_PROMPT},
+                    {"role": "user", "content": user_msg},
+                ],
+                temperature=0.5,
+                max_tokens=budget,
+            )
+            return (resp.choices[0].message.content or "").strip()
+
+        # 这个模型会先"想"再答，预算给小了正事就说不出来，空了就加预算再来一次
+        text = _once(1200)
+        if not text:
+            text = _once(2400)
+        text = text.replace("**", "").strip()
+        return text[:220] or None
+    except Exception as exc:
+        print("[DeepSeek] describe_spot failed:", exc)
+        return None

@@ -24,6 +24,7 @@ from auth import (
 )
 from config import MEDIA_DIR
 from db import get_db
+import reactions
 from models import (
     Friendship,
     FriendRequest,
@@ -98,7 +99,10 @@ def user_brief(db: Session, u: User, viewer: User | None = None) -> dict:
         "nickname": u.nickname,
         "avatar": u.avatar,
         "bio": u.bio,
+        "banner": u.banner,
+        "about": u.about,
         "home_city": u.home_city,
+        "created_at": u.created_at.isoformat() if u.created_at else None,
         "is_me": bool(viewer and viewer.id == u.id),
     }
     if viewer and viewer.id != u.id:
@@ -302,6 +306,10 @@ def me(db: Session = Depends(get_db), user: User = Depends(current_user)):
     data["stats"] = stats_of(db, user.id)
     data["friend_count"] = len(friend_ids(db, user.id))
     data["pending_requests"] = pending_in
+    data["security_question"] = user.security_question
+    data["weather_city"] = user.weather_city
+    # 硬币：跨天自动补，顺手在打开页面时就结算好
+    data["coin_balance"] = reactions.ensure_daily_coins(db, user)
     if not data.get("avatar"):
         data["avatar"] = default_avatar(db, user.id)
     return data
@@ -309,21 +317,48 @@ def me(db: Session = Depends(get_db), user: User = Depends(current_user)):
 
 class ProfileBody(BaseModel):
     nickname: str | None = None
+    username: str | None = None
     bio: str | None = None
     avatar: str | None = None
+    banner: str | None = None
+    about: str | None = None
     home_city: str | None = None
+    weather_city: str | None = None
 
 
 @router.patch("/auth/me")
 def update_me(body: ProfileBody, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    if body.nickname:
-        user.nickname = body.nickname.strip()[:24]
+    """个人主页上看得见的东西都能改：昵称 / 账号 / 头像 / 横幅 / 常驻 / 一句话简介 / 正文"""
+    if body.nickname is not None:
+        nickname = body.nickname.strip()[:24]
+        if not nickname:
+            raise HTTPException(400, "昵称不能空着")
+        user.nickname = nickname
+    if body.username is not None:
+        username = body.username.strip()
+        if username and username != user.username:
+            # 账号就是登录名，规则跟注册时一致
+            if not username.isdigit():
+                raise HTTPException(400, "账号只能使用数字")
+            if len(username) < 3:
+                raise HTTPException(400, "账号至少 3 位数字")
+            if len(username) > 20:
+                raise HTTPException(400, "账号最多 20 位数字")
+            if db.scalar(select(User).where(User.username == username, User.id != user.id)):
+                raise HTTPException(409, "这个账号已经被别人用了")
+            user.username = username
     if body.bio is not None:
-        user.bio = body.bio.strip()[:500] or None
+        user.bio = body.bio.strip()[:200] or None
     if body.avatar is not None:
         user.avatar = body.avatar or None
+    if body.banner is not None:
+        user.banner = body.banner or None
+    if body.about is not None:
+        user.about = body.about.strip()[:8000] or None
     if body.home_city is not None:
         user.home_city = body.home_city.strip()[:32] or None
+    if body.weather_city is not None:
+        user.weather_city = body.weather_city.strip()[:32] or None
     db.commit()
     return user_brief(db, user, user)
 
@@ -364,6 +399,43 @@ async def upload_avatar(
     # 换下来的旧头像顺手删掉，别在磁盘上堆垃圾
     if old.startswith("/media/avatars/"):
         stale = AVATAR_DIR / old.rsplit("/", 1)[-1]
+        if stale.exists():
+            stale.unlink(missing_ok=True)
+
+    return user_brief(db, user, user)
+
+
+BANNER_DIR = Path(MEDIA_DIR) / "banners"
+BANNER_MAX_BYTES = 10 * 1024 * 1024
+
+
+@router.post("/auth/banner")
+async def upload_banner(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """换主页横幅：跟头像一个路子，存到 media/banners/"""
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in AVATAR_EXT:
+        raise HTTPException(415, "只支持 jpg / png / webp / gif")
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, "空文件")
+    if len(data) > BANNER_MAX_BYTES:
+        raise HTTPException(413, "横幅不要超过 10 MB")
+
+    BANNER_DIR.mkdir(parents=True, exist_ok=True)
+    name = f"banner_{user.id}_{uuid.uuid4().hex[:10]}{ext}"
+    (BANNER_DIR / name).write_bytes(data)
+
+    old = user.banner or ""
+    user.banner = f"/media/banners/{name}"
+    db.commit()
+
+    if old.startswith("/media/banners/"):
+        stale = BANNER_DIR / old.rsplit("/", 1)[-1]
         if stale.exists():
             stale.unlink(missing_ok=True)
 
