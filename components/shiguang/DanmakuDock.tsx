@@ -23,6 +23,7 @@ export default function DanmakuDock({
   onDm,
   placeholder = "给这张照片留一句话，它会变成弹幕…",
   onPlayVoice,
+  recError,
 }: {
   items: PhotoComment[];
   draft: string;
@@ -36,6 +37,8 @@ export default function DanmakuDock({
   onDm: (v: DanmakuSettings) => void;
   placeholder?: string;
   onPlayVoice?: (url?: string | null) => void;
+  /** 语音点不开的原因（没 HTTPS / 没权限），有值就显示在输入框上方 */
+  recError?: string;
 }) {
   const [listOpen, setListOpen] = useState(false);
   const [dmOpen, setDmOpen] = useState(false);
@@ -95,6 +98,13 @@ export default function DanmakuDock({
             ))
           )}
         </div>
+      )}
+
+      {recError && !listOpen && (
+        <p className="mb-2 flex items-start gap-1.5 rounded-xl border border-amber-400/30 bg-amber-500/15 px-3 py-2 text-[11px] leading-relaxed text-amber-100">
+          <Mic className="mt-0.5 h-3 w-3 shrink-0" />
+          {recError}
+        </p>
       )}
 
       <div className="flex items-center gap-2">

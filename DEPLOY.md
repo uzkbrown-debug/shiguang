@@ -76,3 +76,23 @@ docker start classroom-wish-caddy-1 classroom-wish-app-1
 - 只有 80，没上 HTTPS；要上就配域名 + `certbot --nginx`。
 - 上传大视频会短时吃内存（nginx `client_max_body_size 500m`）。
 - MySQL 只监听本机，安全组只需开 22 和 80。
+
+## HTTPS / 语音弹幕
+
+浏览器只在**安全上下文**里给麦克风（
+avigator.mediaDevices），所以 http://IP 下语音按钮点不开。
+现在 80 和 443 都在服务：
+
+- <https://139.196.36.166>（自签证书，第一次访问点「高级 → 继续前往」，之后 Chrome 会记住）
+- 也可以用 <https://139.196.36.166.nip.io>（nip.io 把 IP 变成一个主机名，同一张证书）
+
+为什么是自签：这台机器是国内 IP，用未备案域名跑 HTTP-01 校验会被网络层重置（Let'''s Encrypt 报
+Connection reset by peer），所以 ACME 签不下来。**有已备案域名后**换成正式证书只要三步：
+
+`ash
+certbot certonly --webroot -w /var/www/acme -d 你的域名
+# 然后改 /etc/nginx/sites-available/shiguang 里的两行 ssl_certificate*，nginx -t && systemctl reload nginx
+`
+
+前端对这种情况有提示：在 http 下点「语音」不会静默失败，会直接在输入框上方显示
+「语音要 HTTPS 才能录音……换成 https://xxx 再试」（lib/mic.ts）。

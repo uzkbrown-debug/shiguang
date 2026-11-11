@@ -129,6 +129,7 @@ export default function GuideDetailPage({ params }: { params: Promise<{ id: stri
               onPlayVoice={mc.playVoice}
               dm={dm}
               onDm={updateDm}
+              recError={mc.recError}
             />
           </div>
 

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PhotoComment } from "@/components/shiguang/PhotoDanmaku";
+import { openMic } from "@/lib/mic";
 
 /** 照片挂在什么上面：记忆 / 旅行攻略 / 旅行路线 */
 export type MediaTarget = "memory" | "guide" | "route";
@@ -14,6 +15,8 @@ export function useMediaComments(targetType: MediaTarget, targetId: string | und
   const [comments, setComments] = useState<PhotoComment[]>([]);
   const [sending, setSending] = useState(false);
   const [recording, setRecording] = useState(false);
+  // 录不了的原因（没 HTTPS / 没权限），交给界面显示，别静默失败
+  const [recError, setRecError] = useState("");
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -90,8 +93,9 @@ export function useMediaComments(targetType: MediaTarget, targetId: string | und
     async (url?: string | null) => {
       if (recording || !url) return;
       recTargetRef.current = url;
+      setRecError("");
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const stream = await openMic();
         const rec = new MediaRecorder(stream);
         chunksRef.current = [];
         rec.ondataavailable = (e) => {
@@ -107,8 +111,10 @@ export function useMediaComments(targetType: MediaTarget, targetId: string | und
         rec.start();
         recorderRef.current = rec;
         setRecording(true);
-      } catch {
-        /* 没给麦克风权限就算了 */
+      } catch (err) {
+        // 原来这里是空 catch，用户点了「语音」像没反应；现在把原因摆到界面上
+        setRecError(err instanceof Error ? err.message : "打不开麦克风");
+        setRecording(false);
       }
     },
     [recording, sendVoice],
@@ -140,6 +146,7 @@ export function useMediaComments(targetType: MediaTarget, targetId: string | und
     sendVoice,
     sending,
     recording,
+    recError,
     startRec,
     stopRec,
     remove,

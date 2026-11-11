@@ -32,6 +32,7 @@ import DanmakuSettingsPanel, {
 } from "@/components/shiguang/DanmakuSettings";
 import { Settings2 } from "lucide-react";
 import { Mic, Send as SendIcon, Square, MessageSquare, Play, Trash } from "lucide-react";
+import { openMic } from "@/lib/mic";
 
 interface CostItem {
   label: string;
@@ -76,6 +77,8 @@ export default function MemoryGalleryPage() {
   const [comments, setComments] = useState<PhotoComment[]>([]);
   const [sending, setSending] = useState(false);
   const [recording, setRecording] = useState(false);
+  // 语音点不开的原因（http 打开没有麦克风 API / 权限被拒），有值就直接显示
+  const [recError, setRecError] = useState("");
   // 弹幕设置（速度 / 透明度 / 字号 / 开关），存本地
   const [dm, setDm] = useState<DanmakuSettings>(DEFAULT_SETTINGS);
   const [dmOpen, setDmOpen] = useState(false);
@@ -187,8 +190,9 @@ export default function MemoryGalleryPage() {
   const startRec = async (urlOverride?: string) => {
     if (recording) return;
     recTargetRef.current = urlOverride ?? photos[index]?.url ?? null;
+    setRecError("");
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await openMic();
       const rec = new MediaRecorder(stream);
       chunksRef.current = [];
       rec.ondataavailable = (e) => {
@@ -205,8 +209,9 @@ export default function MemoryGalleryPage() {
       rec.start();
       recorderRef.current = rec;
       setRecording(true);
-    } catch {
-      /* 没给麦克风权限就算了 */
+    } catch (err) {
+      setRecError(err instanceof Error ? err.message : "打不开麦克风");
+      setRecording(false);
     }
   };
 
@@ -781,6 +786,13 @@ export default function MemoryGalleryPage() {
                         ))
                     )}
                   </div>
+                )}
+
+                {recError && (
+                  <p className="mb-2 flex items-start gap-1.5 rounded-xl border border-amber-400/30 bg-amber-500/15 px-3 py-2 text-[11px] leading-relaxed text-amber-100">
+                    <Mic className="mt-0.5 h-3 w-3 shrink-0" />
+                    {recError}
+                  </p>
                 )}
 
                 <div className="flex items-center gap-2">
