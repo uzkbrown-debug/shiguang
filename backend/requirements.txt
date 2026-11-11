@@ -2,5 +2,11 @@ fastapi>=0.115
 uvicorn[standard]>=0.30
 SQLAlchemy>=2.0
 PyMySQL>=1.1
+# 上传 / 识图接口要收 multipart 文件，缺了它 FastAPI 直接起不来
+python-multipart>=0.0.9
+# 图片处理：识景点前先压到 1600px、上传时读 EXIF
+Pillow>=10.0
+# DeepSeek 走 OpenAI 兼容接口
+openai>=1.0
 edge-tts>=6.1
 pydantic>=2.0
