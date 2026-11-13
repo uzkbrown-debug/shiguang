@@ -23,6 +23,7 @@ import { fetchMemoryMedia, type MemoryMediaPage } from "@/app/api/shiguang";
 import { emitDataChanged } from "@/lib/dataBus";
 import StoryNarration from "@/components/shiguang/StoryNarration";
 import MemoryVideoPlayer from "@/components/shiguang/MemoryVideoPlayer";
+import MediaThumb from "@/components/shiguang/MediaThumb";
 import PhotoDanmaku, { type PhotoComment } from "@/components/shiguang/PhotoDanmaku";
 import DanmakuSettingsPanel, {
   DEFAULT_SETTINGS,
@@ -486,27 +487,19 @@ export default function MemoryGalleryPage() {
                 <div className="relative rounded-xl overflow-hidden group aspect-[4/3] border border-white/40 dark:border-white/10">
                   <button
                     onClick={() => {
+                      // 视频也要能点开：点开后是站内播放器（原来视频点了没反应）
                       setIndex(i);
-                      if (photo.kind !== "video") setZoomed(true);
+                      setZoomed(true);
                     }}
                     className="block w-full h-full"
                   >
-                    {photo.kind === "video" ? (
-                      <>
-                        {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
-                        <video src={photo.url} muted preload="metadata" className="w-full h-full object-cover" />
-                        <span className="absolute inset-0 flex items-center justify-center bg-black/35 text-white/90">
-                          <Film className="w-5 h-5" />
-                        </span>
-                      </>
-                    ) : (
-                      /* eslint-disable-next-line @next/next/no-img-element */
-                      <img
-                        src={photo.url}
-                        alt={photo.caption}
-                        className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform"
-                      />
-                    )}
+                    <MediaThumb
+                      src={photo.url}
+                      poster={photo.poster}
+                      kind={photo.kind}
+                      alt={photo.caption}
+                      className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform"
+                    />
                   </button>
 
                   <PhotoDanmaku
@@ -686,7 +679,7 @@ export default function MemoryGalleryPage() {
             <div className="max-w-5xl w-full flex flex-col items-center gap-3 pb-28" onClick={(e) => e.stopPropagation()}>
               {photos[index]?.kind === "video" ? (
                 <div className="w-full max-w-3xl">
-                  <MemoryVideoPlayer src={photos[index].url} />
+                  <MemoryVideoPlayer src={photos[index].url} poster={photos[index].poster ?? undefined} />
                 </div>
               ) : (
                 /* eslint-disable-next-line @next/next/no-img-element */

@@ -364,6 +364,8 @@ async def upload_memory(
     # 视频：本体留着可播放，另外抽关键帧当图片
     video_meta_list: list[dict] = []
     for video in video_items:
+        # 抽一帧当封面：列表缩略图直接用图，免得 <video> 画不出帧只剩黑框
+        video["poster"] = ingest.make_video_poster(video["path"])
         info = ingest.video_meta(video["path"])
         frames = ingest.extract_keyframes(video["path"])
         for frame in frames:
@@ -406,6 +408,7 @@ async def upload_memory(
             MemoryMedia(
                 memory_id=memory_id,
                 url=video["url"],
+                poster=video.get("poster"),
                 caption=f"{video['name']}（视频）",
                 sort=len(saved_items) + index,
             )
@@ -461,7 +464,7 @@ async def upload_memory(
         {"duplicate": bool(saved_items) and all(s["duplicate"] for s in saved_items)},
     )
     draft["media"] = [
-        {"id": row.id, "url": row.url, "caption": row.caption, "sort": row.sort, "kind": _media_kind(row.url)}
+        {"id": row.id, "url": row.url, "poster": getattr(row, "poster", None), "caption": row.caption, "sort": row.sort, "kind": _media_kind(row.url)}
         for row in media_rows
     ]
     return draft

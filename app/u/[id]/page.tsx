@@ -283,7 +283,7 @@ export default function UserProfilePage({ params }: { params: Promise<{ id: stri
 
           <div className="px-5 md:px-10 pb-8 md:pb-10">
             {/* 头像压在横幅下沿 + 大标题 */}
-            <div className="relative z-10 -mt-12 md:-mt-14 flex items-end gap-4">
+            <div className="relative z-10 -mt-12 md:-mt-14 flex items-end gap-4 md:gap-5">
               <div className="relative shrink-0">
                 {user.avatar ? (
                   // eslint-disable-next-line @next/next/no-img-element
@@ -315,7 +315,7 @@ export default function UserProfilePage({ params }: { params: Promise<{ id: stri
                 )}
               </div>
 
-              <div className="pb-1 min-w-0 flex-1">
+              <div className="pb-1 min-w-0 flex-1 pl-1 md:pl-2">
                 {editing ? (
                   <input
                     value={nickname}
@@ -327,7 +327,7 @@ export default function UserProfilePage({ params }: { params: Promise<{ id: stri
                   />
                 ) : (
                   <h1
-                    className="text-2xl md:text-4xl font-black tracking-tight text-slate-900 dark:text-white"
+                    className="mt-1.5 md:mt-3 text-2xl md:text-4xl font-black tracking-tight text-slate-900 dark:text-white leading-tight"
                     style={{ fontFamily: "'Noto Serif SC', serif" }}
                   >
                     {user.nickname}

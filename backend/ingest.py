@@ -139,6 +139,40 @@ def _run(cmd: list[str], timeout: int = 180) -> subprocess.CompletedProcess:
     )
 
 
+POSTER_DIR = MEDIA_DIR / "posters"
+
+
+def make_video_poster(path: Path, width: int = 960) -> str | None:
+    """给视频抽一帧当封面图，返回 /media/posters/xxx.jpg
+
+    前端 `<video preload=metadata>` 在很多 mp4 上画不出首帧（moov 在文件尾部），
+    列表里就只剩一个黑框。这里在服务端用 ffmpeg 抽一张，缩略图直接当图片用：
+    既不会白屏，也省流量。
+    """
+    ffmpeg = find_ffmpeg()
+    if not ffmpeg:
+        return None
+    POSTER_DIR.mkdir(parents=True, exist_ok=True)
+    target = POSTER_DIR / f"{path.stem}.jpg"
+    # 先试 1 秒处，短视频/开头全黑就退到 0.1 秒
+    for seek in ("1", "0.1", "0"):
+        try:
+            _run(
+                [
+                    str(ffmpeg), "-y", "-hide_banner", "-loglevel", "error",
+                    "-ss", seek, "-i", str(path),
+                    "-frames:v", "1", "-vf", f"scale={width}:-2",
+                    "-q:v", "4", str(target),
+                ],
+                timeout=60,
+            )
+        except Exception:
+            continue
+        if target.exists() and target.stat().st_size > 1024:
+            return f"/media/posters/{target.name}"
+    return None
+
+
 def video_meta(path: Path) -> dict:
     """用 ffmpeg 的报错信息里读时长与分辨率（不依赖 ffprobe）"""
     meta: dict = {"duration": None, "width": None, "height": None, "fps": None}

@@ -353,6 +353,7 @@ def get_memory_media(
             {
                 "id": r.id,
                 "url": r.url,
+                "poster": getattr(r, "poster", None),
                 "caption": r.caption or "",
                 # 视频和照片混在一条记忆里，前端据此决定用 <video> 还是 <img>
                 "kind": (

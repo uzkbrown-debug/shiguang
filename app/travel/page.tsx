@@ -323,8 +323,13 @@ function TravelInner() {
               {label}
             </button>
           ))}
-          <Link href="/travel/new" className="ml-auto text-[11px] text-slate-400 hover:text-emerald-500">
-            手动写一篇
+          {/* 写攻略的入口原来只有一行 11px 小字，几乎看不见 */}
+          <Link
+            href="/travel/new"
+            className="ml-auto flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-500 text-white text-xs font-medium shadow-sm hover:bg-emerald-600 transition-colors"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            写攻略
           </Link>
         </div>
 

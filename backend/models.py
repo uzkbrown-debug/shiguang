@@ -114,6 +114,8 @@ class MemoryMedia(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     memory_id: Mapped[str] = mapped_column(String(64), ForeignKey("memories.id", ondelete="CASCADE"))
     url: Mapped[str] = mapped_column(String(512))
+    # 视频封面（ffmpeg 抽的首帧，列表缩略图直接用它）
+    poster: Mapped[str | None] = mapped_column(String(512))
     caption: Mapped[str | None] = mapped_column(String(255))
     sort: Mapped[int] = mapped_column(Integer, default=0)
     # 这张图自己的拍摄时间（'YYYY-MM-DD' 开头），用来把一次上传拆成好几天

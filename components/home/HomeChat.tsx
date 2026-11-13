@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import {
@@ -63,6 +63,8 @@ export default function HomeChat({
   onWeatherCity?: (city: string) => void;
 }) {
   const [msgs, setMsgs] = useState<Msg[]>([]);
+  // 切到地图 / 相册再回来，已经聊过的内容不能没了：存一份在本标签页里
+  const CHAT_KEY = "sg-chat-history";
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [spotBusy, setSpotBusy] = useState(false);
@@ -72,6 +74,31 @@ export default function HomeChat({
   const [collapsed, setCollapsed] = useState(false);
   const spotInputRef = useRef<HTMLInputElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
+
+  // 进页面先把上次的对话捞回来（只做一次）
+  useEffect(() => {
+    const t = setTimeout(() => {
+      try {
+        const raw = sessionStorage.getItem(CHAT_KEY);
+        if (!raw) return;
+        const saved = JSON.parse(raw) as Msg[];
+        if (Array.isArray(saved) && saved.length) setMsgs(saved);
+      } catch {
+        /* 存的东西坏了就算了 */
+      }
+    }, 0);
+    return () => clearTimeout(t);
+  }, []);
+
+  // 有新消息就写回去，只留最近 40 条，免得越存越大
+  useEffect(() => {
+    if (!msgs.length) return;
+    try {
+      sessionStorage.setItem(CHAT_KEY, JSON.stringify(msgs.slice(-40)));
+    } catch {
+      /* 无痕模式/配额满了都不影响使用 */
+    }
+  }, [msgs]);
 
   const scrollToEnd = () => {
     requestAnimationFrame(() => {

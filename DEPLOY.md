@@ -96,3 +96,16 @@ certbot certonly --webroot -w /var/www/acme -d 你的域名
 
 前端对这种情况有提示：在 http 下点「语音」不会静默失败，会直接在输入框上方显示
 「语音要 HTTPS 才能录音……换成 https://xxx 再试」（lib/mic.ts）。
+
+## 视频 / 图片 / 预加载（2 核 2G 的优化）
+
+- 静态资源不再过 Next 和 FastAPI：nginx 直接 lias 到 ackend/media、public/*、.next/static，
+  带 sendfile + Accept-Ranges + 30 天缓存。视频因此能拖进度、首帧 7ms 就到
+  （之前三层转发，一个 200MB 的视频能把整页拖死）。
+- 视频封面：上传时用 **ffmpeg** 抽首帧存 media/posters/*.jpg，列表缩略图直接用这张图
+  （<video preload=metadata> 在 moov 位于文件尾的 mp4 上画不出帧，只会剩黑框）。
+  **服务器必须装 ffmpeg**：pt-get install -y ffmpeg，装完跑一次
+  ackend/.venv/bin/python backend/migrate_video_poster.py 给老视频补封面。
+- 前端 components/system/Preload.tsx：空闲时预取 /api/auth/me、/api/timeline/years、
+  /api/memories?limit=12 等轻接口，并把首屏外的封面图用 link rel=prefetch 排进队列；
+  省流模式（saveData）直接跳过。图片统一走 MediaThumb，默认 loading=lazy。

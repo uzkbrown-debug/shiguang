@@ -242,7 +242,7 @@ export default function GuideDetailPage({ params }: { params: Promise<{ id: stri
                 {guide.budget}
               </span>
             )}
-            {guide.best_season && <span>最佳季节 {guide.best_season}</span>}
+            {guide.best_season && <span>最佳月份 {guide.best_season}</span>}
             <span className="px-2 py-0.5 rounded-full bg-white/15">
               {VISIBILITY_LABEL[guide.visibility] ?? "好友可见"}
             </span>

@@ -17,6 +17,7 @@ import SeasonalEffect from "@/components/ui/SeasonalEffect";
 import KiraSparkle from "@/components/ui/KiraSparkle";
 import WelcomeScreen from "@/components/layout/WelcomeScreen";
 import BootGate from "@/components/layout/BootGate";
+import Preload from "@/components/system/Preload";
 import SessionGuard from "@/components/layout/SessionGuard";
 import XiaoshiAI from "@/components/shiguang/XiaoshiAI";
 import DevToolsTranslator from "@/components/shiguang/DevToolsTranslator";
@@ -87,6 +88,8 @@ export default function RootLayout({
                 <MusicProvider>
                   <ToastProvider>
                     <SessionGuard />
+                    {/* 空闲时预取轻接口与封面图：点哪儿都少等一下 */}
+                    <Preload />
                     <BackgroundRenderer />
                     <ClickEffect />
                     <RadialMenu />

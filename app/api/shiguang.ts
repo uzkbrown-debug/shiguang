@@ -10,6 +10,8 @@ import {
 export interface PhotoItem {
   id: number;
   url: string;
+  /** 视频首帧封面（后端 ffmpeg 抽的 jpg） */
+  poster?: string | null;
   caption: string;
   kind?: "image" | "video";
 }

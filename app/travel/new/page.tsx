@@ -213,7 +213,7 @@ function EditorInner() {
               />
             </div>
             <div>
-              <span className={label}>最佳季节</span>
+              <span className={label}>最佳月份</span>
               <input
                 value={season}
                 onChange={(e) => setSeason(e.target.value)}

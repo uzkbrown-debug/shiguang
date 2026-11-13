@@ -2,7 +2,17 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { AudioLines, Loader2, Pause, Play, RefreshCw, SkipBack, SkipForward } from "lucide-react";
+import {
+  AudioLines,
+  Download,
+  Loader2,
+  Pause,
+  Play,
+  RefreshCw,
+  SkipBack,
+  SkipForward,
+  Trash2,
+} from "lucide-react";
 
 interface SubtitleSeg {
   text: string;
@@ -54,6 +64,8 @@ export default function StoryNarration({ memoryId }: { memoryId: string }) {
   const [index, setIndex] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [timeMs, setTimeMs] = useState(0);
+  const [deleting, setDeleting] = useState(false);
+  const [notice, setNotice] = useState("");
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -87,6 +99,47 @@ export default function StoryNarration({ memoryId }: { memoryId: string }) {
       setError((e as Error).message || "生成失败，请稍后再试");
     } finally {
       setGenerating(false);
+    }
+  };
+
+  /** 把整条故事的旁白导出成 txt（每幕一段） */
+  const downloadScript = () => {
+    if (!story) return;
+    const lines = [
+      story.title || "配音故事",
+      "",
+      ...story.scenes.map(
+        (s, i) => `第 ${i + 1} 幕  ${s.narration ?? ""}`.trimEnd() + "\n",
+      ),
+    ];
+    const blob = new Blob([lines.join("\n")], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${(story.title || "配音故事").slice(0, 40)}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setNotice("文字稿已下载");
+    window.setTimeout(() => setNotice(""), 2600);
+  };
+
+  /** 删掉这条配音故事（连音频一起），回到未生成的状态 */
+  const deleteStory = async () => {
+    if (!story || deleting) return;
+    if (!window.confirm("删掉这条配音故事？音频也会一起删掉。")) return;
+    setDeleting(true);
+    setNotice("");
+    try {
+      const res = await fetch(`/api/stories/${story.id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error((await res.text()).slice(0, 120) || "删除失败");
+      setStory(null);
+      setIndex(0);
+      setPlaying(false);
+      setNotice("已经删掉了");
+    } catch (e) {
+      setError((e as Error).message || "删除失败");
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -195,16 +248,41 @@ export default function StoryNarration({ memoryId }: { memoryId: string }) {
         <div className="md:col-span-4">
           <div className="relative rounded-2xl overflow-hidden bg-slate-900/40 aspect-[4/3]">
             <AnimatePresence mode="wait">
-              <motion.img
-                key={scene?.id}
-                src={scene?.image_url || story.scenes[0]?.image_url || ""}
-                alt={`第 ${index + 1} 幕`}
-                initial={{ opacity: 0, scale: 1.02 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.35 }}
-                className="w-full h-full object-cover"
-              />
+              {(() => {
+                const src = scene?.image_url || story.scenes[0]?.image_url || "";
+                const isVideo = /\.(mp4|mov|webm|m4v)(\?|$)/i.test(src);
+                // 视频幕：给一个能点的播放器，原来当图片塞进去就只能看到一个空框
+                return isVideo ? (
+                  <motion.div
+                    key={`${scene?.id}-v`}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.35 }}
+                    className="w-full h-full"
+                  >
+                    {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+                    <video
+                      src={src}
+                      controls
+                      playsInline
+                      preload="metadata"
+                      className="w-full h-full object-cover bg-black"
+                    />
+                  </motion.div>
+                ) : (
+                  <motion.img
+                    key={scene?.id}
+                    src={src}
+                    alt={`第 ${index + 1} 幕`}
+                    initial={{ opacity: 0, scale: 1.02 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.35 }}
+                    className="w-full h-full object-cover"
+                  />
+                );
+              })()}
             </AnimatePresence>
             <div className="absolute bottom-2 left-2 px-2 py-0.5 rounded-lg bg-black/50 text-white/85 text-[11px]">
               第 {index + 1} 幕
@@ -285,6 +363,29 @@ export default function StoryNarration({ memoryId }: { memoryId: string }) {
           )}
           {error && <p className="mt-2 text-[11px] text-rose-500">{error}</p>}
         </div>
+      </div>
+
+      {/* 底部动作：存一份旁白文稿 / 删掉这条配音故事 */}
+      <div className="mt-5 flex flex-wrap items-center gap-2 border-t border-white/10 pt-4">
+        <button
+          onClick={downloadScript}
+          className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-sky-500 text-white text-[11.5px] hover:bg-sky-600 transition-colors"
+        >
+          <Download className="w-3.5 h-3.5" />
+          保存旁白文稿
+        </button>
+        <button
+          onClick={deleteStory}
+          disabled={deleting}
+          className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-rose-500/15 text-rose-500 text-[11.5px] hover:bg-rose-500/25 transition-colors disabled:opacity-50"
+        >
+          {deleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+          删除这条故事
+        </button>
+        <span className="text-[10.5px] text-slate-400">
+          生成时已自动存进故事库（{story.scenes.length} 幕），这里是另存一份文字稿。
+        </span>
+        {notice && <span className="text-[10.5px] text-emerald-500">{notice}</span>}
       </div>
 
       {scene?.audio_url && (
