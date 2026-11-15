@@ -74,9 +74,10 @@ _redact_backup/
 
 # ---------- 大体积素材：不进仓库（本地保留） ----------
 /public/music/
-/public/videos/
+/public/videos/*
+!public/videos/boot/
+!public/videos/boot/**
 # 开屏那段 12 秒的片子要进库（其余 public 视频仍忽略）
-!/public/videos/boot/
 /public/live2d/
 
 # ---------- 开发期临时目录：不进仓库 ----------
