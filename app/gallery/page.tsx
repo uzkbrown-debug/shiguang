@@ -3,8 +3,11 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Clock3, Users, User as UserIcon, Globe2, MessageSquare, Volume2 } from "lucide-react";
-import PolaroidGallery, { type Collection } from "@/components/shiguang/PolaroidGallery";
-import { fetchMemories } from "@/app/api/shiguang";
+import PolaroidGallery, { type Collection as GalleryItem } from "@/components/shiguang/PolaroidGallery";
+import FlameTrashZone from "@/components/shiguang/FlameTrashZone";
+import { deleteMemory, fetchMemories } from "@/app/api/shiguang";
+import { fetchMe } from "@/lib/session";
+import { emitDataChanged } from "@/lib/dataBus";
 
 /** 2026-11-01 → 2026年11月1日 */
 function cnDate(raw: string): string {
@@ -58,12 +61,70 @@ const EMPTY_TEXT: Record<Scope, { title: string; hint: string }> = {
 };
 
 export default function GalleryPage() {
-  const [items, setItems] = useState<Collection[]>([]);
+  const [items, setItems] = useState<GalleryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [scope, setScope] = useState<Scope>("me");
   // 好友弹幕：好友最近在照片上留的那些话
   const [feed, setFeed] = useState<FeedItem[]>([]);
   const [feedOpen, setFeedOpen] = useState(false);
+  // 拖拽删除：跟旅行页同一套（拖到蓝色火焰里松手就烧掉）
+  const [myId, setMyId] = useState<string | null>(null);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [overFlame, setOverFlame] = useState(false);
+  const [burningId, setBurningId] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchMe()
+      .then((me) => setMyId(me?.id ?? null))
+      .catch(() => setMyId(null));
+  }, []);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = window.setTimeout(() => setToast(null), 2600);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
+
+  /** 这条相册能不能删：只有自己的记忆能删 */
+  const canBurn = (item: GalleryItem | null | undefined) =>
+    Boolean(item && myId && item.ownerId && item.ownerId === myId);
+
+  // 正在拖的那一条（可能是别人的，那就烧不掉）
+  const draggingItem = draggingId ? items.find((it) => it.id === draggingId) ?? null : null;
+
+  const burnItem = async (id: string) => {
+    setOverFlame(false);
+    setDraggingId(null);
+
+    const item = items.find((it) => it.id === id);
+    if (!item) return;
+
+    let uid = myId;
+    if (!uid) {
+      const me = await fetchMe();
+      uid = me?.id ?? null;
+      setMyId(uid);
+    }
+    if (!uid || item.ownerId !== uid) {
+      setToast("只能删除自己的相册");
+      return;
+    }
+
+    setBurningId(id);
+    try {
+      await deleteMemory(id);
+      window.setTimeout(() => {
+        setItems((prev) => prev.filter((it) => it.id !== id));
+        emitDataChanged({ kind: "memory", action: "deleted", id });
+        setToast(`已删除《${item.title}》`);
+        setBurningId(null);
+      }, 260);
+    } catch {
+      setToast("删除失败，可能没有权限或网络断了");
+      setBurningId(null);
+    }
+  };
 
   useEffect(() => {
     let alive = true;
@@ -86,10 +147,11 @@ export default function GalleryPage() {
         try {
           const { items: mems } = await fetchMemories({ scope });
           if (!alive) return;
-          const list: Collection[] = mems
+          const list: GalleryItem[] = mems
             .filter((m) => m.cover)
             .map((m) => ({
               id: m.id,
+              ownerId: m.user_id,
               title: m.title || "一段未命名的记忆",
               cover: m.cover,
               date: cnDate(m.happened_at),
@@ -243,9 +305,52 @@ export default function GalleryPage() {
             <p className="mt-2 text-[11px] text-slate-400">{EMPTY_TEXT[scope].hint}</p>
           </div>
         ) : (
-          <PolaroidGallery items={items} tone="dark" />
+          <>
+            <p className="mb-6 text-[11px] text-slate-500">
+              自己的相册可以直接拖到页面下方的蓝色火焰里删掉；别人的拖不进去。
+            </p>
+            <PolaroidGallery
+              items={items}
+              tone="dark"
+              drag={{
+                draggingId,
+                burningId,
+                canDrag: canBurn,
+                onDragStart: (item, event) => {
+                  event.dataTransfer.setData("text/plain", item.id);
+                  event.dataTransfer.effectAllowed = "move";
+                  setDraggingId(item.id);
+                },
+                onDragEnd: () => {
+                  setDraggingId(null);
+                  setOverFlame(false);
+                },
+              }}
+            />
+          </>
         )}
       </div>
+
+      {/* 拖拽删除：拖到正下方蓝色火焰松手就烧掉 */}
+      <FlameTrashZone
+        visible={Boolean(draggingId)}
+        active={overFlame}
+        denied={Boolean(draggingItem && !canBurn(draggingItem))}
+        label={draggingItem && !canBurn(draggingItem) ? "这是别人的相册，删不掉" : undefined}
+        onDragOver={() => setOverFlame(true)}
+        onDragLeave={() => setOverFlame(false)}
+        onDrop={(event) => {
+          event.preventDefault();
+          const id = event.dataTransfer.getData("text/plain") || draggingId;
+          if (id) void burnItem(id);
+        }}
+      />
+
+      {toast && (
+        <div className="fixed left-1/2 bottom-28 z-[96] -translate-x-1/2 rounded-xl border border-cyan-400/30 bg-slate-950/90 px-4 py-2 text-[11px] text-cyan-50 shadow-lg">
+          {toast}
+        </div>
+      )}
     </div>
   );
 }

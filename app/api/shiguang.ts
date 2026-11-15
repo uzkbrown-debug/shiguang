@@ -167,3 +167,12 @@ export async function fetchMemories(params?: { year?: number; limit?: number; sc
   // 后端没有就是没有：不再回退本地演示数据，否则新账号会看到别人的记忆
   return { items: remote ?? [], source: "backend" };
 }
+
+/** 删掉一段记忆（连同它的照片/视频文件和所有引用） */
+export async function deleteMemory(memoryId: string): Promise<void> {
+  const res = await fetch(`/api/memories/${memoryId}`, { method: "DELETE" });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(detail.slice(0, 120) || "删除失败");
+  }
+}

@@ -957,11 +957,27 @@ def delete_memory(
         raise HTTPException(403, "只能删自己的记忆")
 
     medias = db.scalars(select(MemoryMedia).where(MemoryMedia.memory_id == memory_id)).all()
+    # 同一个文件（内容哈希去重）可能被好几条记忆共用：只有再没人引用时才真删盘上的文件，
+    # 否则删一条记忆会把别人的照片一起删掉（页面上就变成裂图）
+    shared = {
+        row
+        for row in db.scalars(
+            select(MemoryMedia.url).where(
+                MemoryMedia.memory_id != memory_id,
+                MemoryMedia.url.in_([m.url for m in medias] or [""]),
+            )
+        )
+    }
     for item in medias:
-        if item.url.startswith("/media/uploads/"):
+        if item.url.startswith("/media/uploads/") and item.url not in shared:
             path = ingest.UPLOAD_DIR / item.url.split("/")[-1]
             if path.exists():
                 path.unlink(missing_ok=True)
+        poster = getattr(item, "poster", None)
+        if poster and poster.startswith("/media/posters/") and item.url not in shared:
+            poster_path = ingest.POSTER_DIR / poster.split("/")[-1]
+            if poster_path.exists():
+                poster_path.unlink(missing_ok=True)
 
     # 路线站点：解除引用（站点本身留着）
     unlinked = db.execute(
