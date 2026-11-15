@@ -194,7 +194,7 @@ export default function LoginPage() {
     <div className="fixed inset-0 z-[200] overflow-y-auto bg-slate-950">
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
-        src="/images/wall_mushoku.jpg"
+        src="/images/login-dadi.jpg?v=1"
         alt=""
         className="fixed inset-0 w-full h-full object-cover"
       />
