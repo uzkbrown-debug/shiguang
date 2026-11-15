@@ -130,7 +130,9 @@ start.bat
 | `MYSQL_HOST` / `MYSQL_PORT` / `MYSQL_USER` / `MYSQL_PASSWORD` / `MYSQL_DATABASE` | 数据库连接 |
 | `DEEPSEEK_API_KEY` / `DEEPSEEK_MODEL` | AI 分析，留空则走本地降级逻辑 |
 | `TTS_VOICE` / `TTS_RATE` / `TTS_VOLUME` | 配音音色，默认 `zh-CN-XiaoxiaoNeural` |
-| `FFMPEG_PATH` / `VIDEO_KEYFRAMES` / `MAX_VIDEO_MB` | 视频处理参数 |
+| `FFMPEG_PATH` / `VIDEO_KEYFRAMES` / `MAX_VIDEO_MB` | 视频处理参数（封面抽帧、关键帧、体积上限） |
+| `AMAP_KEY` | 高德 Web 服务 key：路线沿真实道路绘制、城市地理编码（留空则退化为站点直连 + 内置城市表） |
+| `DEMO_OWNER_USER` / `DEMO_OWNER_PASS` | 种子脚本往演示账号写内容时使用的账号密码 |
 | `NETEASE_COOKIE` / `TENCENT_COOKIE` / `KUGOU_COOKIE` | 音乐平台 Cookie（可选，仅服务端使用） |
 
 ## 目录结构
@@ -182,11 +184,42 @@ npm run start
 
 ## 安全说明
 
-这是一个**个人项目**，有几处是刻意做简的，公开部署前请自行加固：
+账号体系已经落地：密码走 PBKDF2 加盐存储，登录下发会话令牌（`sg_auth` Cookie），
+记忆 / 攻略 / 路线都有 `private ↔ friends ↔ public` 三档可见性，删除类接口一律校验归属。
 
-- 站点的「访问密码」是前端比对，只能挡一下路人，**不构成真实鉴权**；
-- 后端接口默认没有鉴权，请不要直接暴露到公网；
-- 音乐平台 Cookie 等同于账号凭证，务必只放在 `backend/.env`（已被 `.gitignore` 忽略）。
+仍需注意的几点：
+
+- 会话 Cookie 是 `httponly=False`（前端要读），生产环境建议改为后端下发 + HttpOnly；
+- 语音弹幕依赖浏览器安全上下文，**站点必须走 HTTPS**，否则麦克风接口不可用（界面会明确提示）；
+- 音乐平台 Cookie 等同于账号凭证，只放 `backend/.env`（已被 `.gitignore` 忽略）；
+- 数据库账号请只授权本库、只监听 `127.0.0.1`，不要对公网开放 3306。
+
+## 线上实例
+
+| 项 | 值 |
+| --- | --- |
+| 地址 | <http://139.196.36.166>（HTTPS：<https://139.196.36.166>，自签证书需点一次「继续访问」） |
+| 环境 | 阿里云 ECS，2 核 / 1.6 GB 可用内存，Ubuntu 22.04 |
+| 组成 | nginx（静态直出 + 反代）→ Next.js :3000 → FastAPI :8000 → MySQL 8 |
+| 运维细节 | 见 [`DEPLOY.md`](./DEPLOY.md)：为什么不在这台机器上 `next build`、MySQL 小内存参数、日志位置 |
+
+## 团队信息
+
+> 提交前请把下表里的占位内容替换成真实信息（姓名 / 学号 / 分工 / 联系方式）。
+
+| 角色 | 姓名 | 学号 | 主要分工 |
+| --- | --- | --- | --- |
+| 负责人 / 全栈 | YG（待补全名） | 待填 | 架构设计、前后端实现、AI 链路、云端部署与运维 |
+| 前端 | 待填 | 待填 | 页面与交互、组件库、动画与响应式 |
+| 后端 | 待填 | 待填 | 接口与数据模型、权限与可见性、上传解析 |
+| 测试 / 文档 | 待填 | 待填 | 用例设计、回归测试、技术文档与演示材料 |
+
+项目周期：2026-10-09 起（首次提交）→ 2026-11-15（当前版本），共 17 次提交。
+
+## 技术文档
+
+- [`docs/技术文档-拾光.pdf`](./docs/技术文档-拾光.pdf)：完整技术文档（26 页，含架构图、AI 方案、测试与部署、创新点）
+- [`docs/环境配置.md`](./docs/环境配置.md)：环境变量说明 + 依赖清单 + 常见启动问题
 
 ## License
 
