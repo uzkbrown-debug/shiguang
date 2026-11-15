@@ -68,7 +68,7 @@ export default function RootLayout({
             __html:
               `try{` +
               `var K='shiguang_boot',C='shiguang_clip',s=location.search;` +
-              `var clips=['/videos/boot/boot-1.mp4?v=3','/videos/boot/boot-2.mp4?v=3','/videos/boot/boot-3.mp4?v=3'];` +
+              `var clips=['/videos/boot/boot-1.mp4?v=4'];` +
               `if(s.indexOf('boot=0')>-1)localStorage.setItem(K,'off');` +
               `if(s.indexOf('boot=1')>-1)localStorage.setItem(K,'on');` +
               // 登录页不播开场：那里的遮罩是关掉的，再打 data-boot 就会把整页藏没

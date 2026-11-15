@@ -4,11 +4,9 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { usePathname } from "next/navigation";
 import { siteConfig } from "@/siteConfig";
 
-const CLIPS = [
-  "/videos/boot/boot-1.mp4?v=2",
-  "/videos/boot/boot-2.mp4?v=2",
-  "/videos/boot/boot-3.mp4?v=2",
-];
+// 开屏只留这一段：山河/城市夜景的混剪（来源见 public/videos/boot/SOURCE.txt）
+// 换素材时把文件名后面的 ?v= 加一，绕开浏览器缓存
+const CLIPS = ["/videos/boot/boot-1.mp4?v=4"];
 const MIN_SHOW_MS = 2400;
 const FADE_MS = 1000;
 const WARM_MS = 800; // 交班后留给站点挂载、稳住的时间
@@ -287,6 +285,7 @@ export default function WelcomeScreen() {
         src={clip}
         autoPlay
         muted
+        loop
         playsInline
         preload="auto"
         onLoadedMetadata={(e) => setDuration(e.currentTarget.duration || 0)}
@@ -303,8 +302,15 @@ export default function WelcomeScreen() {
         onError={finish}
       />
 
+      {/* 城市夜景比原来的片子亮，压一层中间的暗幕，标题才读得清 */}
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(2,6,23,0.62),rgba(2,6,23,0.35)_45%,rgba(2,6,23,0.55))]" />
       <div className="absolute inset-x-0 bottom-0 h-1/3 bg-gradient-to-t from-black/75 to-transparent" />
       <div className="absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-black/55 to-transparent" />
+      {/* 标题周围再罩一层柔光暗影，压住背后的高楼灯光 */}
+      <div
+        className="absolute left-1/2 top-1/2 h-[420px] w-[720px] max-w-[92vw] -translate-x-1/2 -translate-y-1/2 rounded-full pointer-events-none"
+        style={{ background: "radial-gradient(closest-side, rgba(2,6,23,0.72), rgba(2,6,23,0.28) 60%, transparent)" }}
+      />
 
       {/* 站名 */}
       <div className="absolute inset-0 flex flex-col items-center justify-center px-6 text-center">
