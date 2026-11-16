@@ -12,6 +12,8 @@ export interface WeatherData {
   icon?: string;
   high?: number | null;
   low?: number | null;
+  /** 后端给失败原因（城市查不到坐标才会带），用来区分「查不到」和「连不上」 */
+  error?: string;
 }
 
 const ICONS: Record<string, typeof Sun> = {

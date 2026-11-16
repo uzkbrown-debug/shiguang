@@ -64,6 +64,14 @@ export async function register(input: {
 
 export async function logout() {
   await fetch("/api/auth/logout", { method: "POST" });
+  // 退出时把「小拾对话」这类按账号存的本地缓存一并清掉，公共电脑上不留痕迹
+  try {
+    Object.keys(sessionStorage)
+      .filter((k) => k.startsWith("sg-chat-"))
+      .forEach((k) => sessionStorage.removeItem(k));
+  } catch {
+    /* 无痕模式忽略 */
+  }
   window.location.href = "/login";
 }
 

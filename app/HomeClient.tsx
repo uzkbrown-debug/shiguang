@@ -162,6 +162,7 @@ export default function HomeClient() {
           <FadeIn delay={0.02} className="w-full flex">
             <HomeChat
               name={me?.nickname}
+              userId={me?.id}
               memoryCount={memoryCount}
               cityCount={cityCount}
               weather={weather}

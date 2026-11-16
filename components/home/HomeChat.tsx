@@ -47,6 +47,7 @@ const W_ICONS: Record<string, typeof Sun> = {
  */
 export default function HomeChat({
   name,
+  userId,
   memoryCount,
   cityCount,
   weather,
@@ -54,6 +55,8 @@ export default function HomeChat({
   onWeatherCity,
 }: {
   name?: string | null;
+  /** 当前账号 id：对话历史按账号分开存，换账号不会串台 */
+  userId?: string | null;
   memoryCount: number;
   cityCount: number;
   weather?: WeatherData | null;
@@ -63,8 +66,9 @@ export default function HomeChat({
   onWeatherCity?: (city: string) => void;
 }) {
   const [msgs, setMsgs] = useState<Msg[]>([]);
-  // 切到地图 / 相册再回来，已经聊过的内容不能没了：存一份在本标签页里
-  const CHAT_KEY = "sg-chat-history";
+  // 切到地图 / 相册再回来，已经聊过的内容不能没了：存一份在本标签页里。
+  // 键里带账号 id —— 换账号登录后拿到的是自己那一份，不会显示上一个账号的对话。
+  const CHAT_KEY = `sg-chat-${userId || "guest"}`;
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [spotBusy, setSpotBusy] = useState(false);
@@ -75,20 +79,23 @@ export default function HomeChat({
   const spotInputRef = useRef<HTMLInputElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
 
-  // 进页面先把上次的对话捞回来（只做一次）
+  // 账号变了就换一份历史：先把当前列表清掉，再读这个账号自己的那份
   useEffect(() => {
     const t = setTimeout(() => {
+      let restored: Msg[] = [];
       try {
         const raw = sessionStorage.getItem(CHAT_KEY);
-        if (!raw) return;
-        const saved = JSON.parse(raw) as Msg[];
-        if (Array.isArray(saved) && saved.length) setMsgs(saved);
+        if (raw) {
+          const saved = JSON.parse(raw) as Msg[];
+          if (Array.isArray(saved)) restored = saved;
+        }
       } catch {
-        /* 存的东西坏了就算了 */
+        /* 存的东西坏了就当没有 */
       }
+      setMsgs(restored);
     }, 0);
     return () => clearTimeout(t);
-  }, []);
+  }, [CHAT_KEY]);
 
   // 有新消息就写回去，只留最近 40 条，免得越存越大
   useEffect(() => {
@@ -98,7 +105,7 @@ export default function HomeChat({
     } catch {
       /* 无痕模式/配额满了都不影响使用 */
     }
-  }, [msgs]);
+  }, [msgs, CHAT_KEY]);
 
   const scrollToEnd = () => {
     requestAnimationFrame(() => {
@@ -203,7 +210,13 @@ export default function HomeChat({
           <span className="text-[15px] font-bold text-slate-500 dark:text-slate-300 mt-0.5">°</span>
         </div>
         <div className="mt-1 text-[11.5px] text-slate-500 dark:text-slate-300">
-          {weather?.ok ? weather.text ?? "多云" : weather ? "没查到这座城" : "读取中…"}
+          {weather?.ok
+            ? weather.text ?? "多云"
+            : weather
+              ? weather.error
+                ? "没查到这座城市"
+                : "天气暂时连不上"
+              : "读取中…"}
         </div>
         <div className="mt-0.5 text-[10.5px] text-slate-400 tabular-nums">
           {weather?.low ?? "--"}° / {weather?.high ?? "--"}°
