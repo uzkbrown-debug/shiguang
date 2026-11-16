@@ -2,6 +2,7 @@
 import hashlib
 import json
 import random
+import re
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -236,6 +237,50 @@ def _media_kind(url: str) -> str:
     if ext in ingest.IMAGE_EXT:
         return "image"
     return "text"
+
+
+def _place_close(a: str, b: str) -> bool:
+    left = re.sub(r"\s+", "", a or "")
+    right = re.sub(r"\s+", "", b or "")
+    return bool(left and right) and (left == right or left in right or right in left)
+
+
+def _spots_from_text(db: Session, text: str) -> list[str]:
+    """从用户写的要点里按出现顺序抽出地名（一趟行程常常就写在要点里）
+
+    认的依据是「库里真实存在的地点名」+「真实城市表」，不是模型猜的，所以可以直接拿来连线。
+    """
+    body = (text or "").strip()
+    if not body:
+        return []
+
+    known: list[str] = []
+    try:
+        known.extend(
+            name.strip()
+            for name in db.scalars(select(Location.name).distinct()).all()
+            if name and len(name.strip()) >= 2
+        )
+    except Exception as exc:  # noqa: BLE001
+        print("[spots] 地点表读取失败:", exc)
+    known.extend(name for name in city_coords.CITY_COORDS if len(name) >= 2)
+
+    hits: list[tuple[int, str]] = []
+    seen: set[str] = set()
+    for name in sorted(set(known), key=len, reverse=True):
+        if name in seen:
+            continue
+        index = body.find(name)
+        if index < 0:
+            continue
+        # 已经收过更长的、包含它的名字（例如先收了「青海湖」就不再收「青海」）
+        if any(_place_close(name, kept) for _, kept in hits):
+            continue
+        seen.add(name)
+        hits.append((index, name))
+
+    hits.sort(key=lambda item: item[0])
+    return [name for _, name in hits][:6]
 
 
 def _location_from_place(db: Session, place: str) -> Location | None:
@@ -713,6 +758,45 @@ def analyze_memory(
             else "AI 分析暂时不可用，已改用基础推断"
         )
 
+    # ---- 多个地点：一批照片常常跑了好几个地方，认出来才能连成一条路线 ----
+    spots: list[dict] = []
+    # 用户在要点里写下的行程（「先到北京，然后青海湖，最后上海」）最可靠，先按原文抽一遍
+    text_spots: list[str] = []
+    try:
+        text_spots = _spots_from_text(db, f"{notes}\n{content}")
+    except Exception as exc:  # noqa: BLE001
+        print("[spots] 要点里的地点没抽出来:", exc)
+
+    vision_spots: list[dict] = []
+    if image_paths:
+        try:
+            vision_spots = llm.identify_route_spots(image_paths[:6], notes)
+        except Exception as exc:  # noqa: BLE001
+            print("[spots] 多地点识别失败:", exc)
+
+    if text_spots:
+        spots = [{"spot": name, "city": "", "confidence": 1.0, "source": "notes"} for name in text_spots]
+        for item in vision_spots:
+            label = item.get("spot") or ""
+            if label and not any(_place_close(s.get("spot", ""), label) for s in spots):
+                spots.append(item)
+    else:
+        spots = vision_spots
+    spots = spots[:6]
+
+    if spots:
+        memory.spots_json = json.dumps(spots, ensure_ascii=False)
+        # 主地点还空着的话，用第一个认出坐标的地点补上
+        if not memory.location_id:
+            for item in spots:
+                loc = _location_from_place(db, f"{item.get('city') or ''}{item.get('spot') or ''}")
+                if loc:
+                    memory.location_id = loc.id
+                    place_source = "ai-spots"
+                    meta["location_guess"] = loc.name
+                    meta["place_source"] = "ai-spots"
+                    break
+
     # ---- 地点兜底：GPS 和 AI 都没给出结果时，随便给一个像样的地方 ----
     # 演示里宁可有一个「明确标着是猜的」地点，也不要留一个上不了地图的空点
     if not memory.location_id:
@@ -756,6 +840,12 @@ def analyze_memory(
     db.commit()
     db.refresh(memory)
 
+    spot_line = ""
+    if len(spots) > 1:
+        spot_line = " · 这一批认出 " + str(len(spots)) + " 个地点：" + " → ".join(
+            (s.get("spot") or s.get("city") or "") for s in spots[:6]
+        )
+
     steps = [
         {
             "name": "读取元数据",
@@ -765,7 +855,7 @@ def analyze_memory(
         {"name": "理解素材", "detail": ai_desc},
         {
             "name": "提取实体",
-            "detail": f"时间 {memory.happened_at or '未识别'} · 地点 {meta.get('location_guess') or '未识别'}",
+            "detail": f"时间 {memory.happened_at or '未识别'} · 地点 {meta.get('location_guess') or '未识别'}{spot_line}",
         },
         {"name": "生成文案", "detail": memory.title},
     ]
@@ -779,6 +869,8 @@ def analyze_memory(
     # 前端要拿这两个显示「AI 判断你是在哪旅行」
     draft["place"] = meta.get("location_guess")
     draft["trip"] = meta.get("trip")
+    # 这一批照片里认出来的多个地点（会用来连成路线）
+    draft["spots"] = spots
     return {
         "draft": draft,
         "steps": steps,
@@ -788,6 +880,7 @@ def analyze_memory(
         "person_question": person_question,
         "place": meta.get("location_guess"),
         "trip": meta.get("trip"),
+        "spots": spots,
         "facts": facts,
     }
 

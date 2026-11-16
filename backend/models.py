@@ -82,6 +82,8 @@ class Memory(Base):
     tips: Mapped[str | None] = mapped_column(Text)
     cover: Mapped[str | None] = mapped_column(String(255))
     media_count: Mapped[int] = mapped_column(Integer, default=0)
+    # 这一批照片里认出来的多个地点（JSON 数组，按拍摄顺序），用来生成多站路线
+    spots_json: Mapped[str | None] = mapped_column(Text)
     ai_status: Mapped[str | None] = mapped_column(String(16), default="confirmed")
     confidence: Mapped[float | None] = mapped_column(Float, default=0.8)
     ai_generated: Mapped[bool] = mapped_column(Boolean, default=False)

@@ -106,6 +106,79 @@ def _route_point_matches(p: RoutePoint, loc: Location) -> bool:
 
 # ---------- 攻略 ↔ 路线：从记忆写出来的攻略，也要有一条能在地图上走的线 ----------
 
+_SPOT_COORD_CACHE: dict[str, tuple[float, float] | None] = {}
+
+
+def _name_close(a: str | None, b: str | None) -> bool:
+    left = re.sub(r"\s+", "", a or "")
+    right = re.sub(r"\s+", "", b or "")
+    return bool(left and right) and (left == right or left in right or right in left)
+
+
+def _same_label(a: str | None, b: str | None) -> bool:
+    """严格一点：去掉空格和「市」之后必须完全一样，避免「北京」把「北京 天安门」也算成同一个地方"""
+    def norm(value: str | None) -> str:
+        text = re.sub(r"\s+", "", value or "")
+        return text[:-1] if text.endswith("市") and len(text) > 2 else text
+
+    left, right = norm(a), norm(b)
+    return bool(left and right) and left == right
+
+
+def _spot_coords(db: Session, name: str, city: str) -> tuple[float, float] | None:
+    """景点的坐标：先用已有地点记录，再问城市坐标表 / 高德"""
+    for label in (name, f"{city}{name}", city):
+        if not label:
+            continue
+        loc = db.scalar(select(Location).where(Location.name == label).limit(1))
+        if loc and loc.latitude is not None and loc.longitude is not None:
+            return (loc.latitude, loc.longitude)
+    for label in (f"{city}{name}", name, city):
+        if not label:
+            continue
+        if label in _SPOT_COORD_CACHE:
+            cached = _SPOT_COORD_CACHE[label]
+            if cached:
+                return cached
+            continue
+        coords = city_coords.lookup_coords(label)
+        _SPOT_COORD_CACHE[label] = coords
+        if coords:
+            return coords
+    return None
+
+
+def _memory_spot_points(db: Session, memory: Memory) -> list[dict]:
+    """这条记忆自己认出来的多个地点（上传时按拍摄顺序存进 spots_json）
+
+    一条记忆跑了两三个地方时，靠它把路线连成多站；只有一处时就是一个点。
+    """
+    try:
+        spots = json.loads(getattr(memory, "spots_json", None) or "[]")
+    except Exception:
+        return []
+    if not isinstance(spots, list):
+        return []
+
+    day = (memory.happened_at or "")[:10] or None
+    out: list[dict] = []
+    for item in spots[:6]:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("spot") or "").strip()
+        city = str(item.get("city") or "").strip()
+        label = name or city
+        if not label:
+            continue
+        if any(_name_close(x["name"], label) for x in out):
+            continue
+        coords = _spot_coords(db, label, city)
+        if coords is None:
+            continue
+        out.append({"name": label, "city": city, "lat": coords[0], "lng": coords[1], "day": day})
+    return out
+
+
 def _memory_place(db: Session, memory: Memory) -> tuple[str, str]:
     """这条记忆落在哪：地点名 + 城市名（地点缺失时用「路上」兜底）"""
     loc = db.get(Location, memory.location_id) if memory.location_id else None
@@ -177,13 +250,23 @@ def link_guide_route(
 
     route = db.get(TravelRoute, guide.route_id) if guide.route_id else None
     if route is None:
-        # 同城同名地点已经有路线就接过去，避免每次上传都多一条线
-        route = db.scalar(
+        # 复用旧路线要谨慎：只认「主地点完全相同 + 日期挨着」的旧线，
+        # 否则一趟跨城的行程会被并进同城那条老线里（青海湖被拼成 4000 公里那次就是这么来的）。
+        candidates = db.scalars(
             select(TravelRoute)
             .options(selectinload(TravelRoute.points))
-            .where(TravelRoute.user_id == user.id, TravelRoute.title.like(f"%{place}%"))
+            .where(TravelRoute.user_id == user.id, TravelRoute.start_date.is_not(None))
             .order_by(TravelRoute.created_at.desc())
-        )
+            .limit(40)
+        ).all()
+        for cand in candidates:
+            if not any(_same_label(p.name, place) for p in cand.points):
+                continue
+            if start and end and cand.start_date and cand.end_date:
+                if end < cand.start_date or start > cand.end_date:
+                    continue
+            route = cand
+            break
     if route is None:
         route = TravelRoute(
             id="rt_" + uuid.uuid4().hex[:10],
@@ -204,6 +287,25 @@ def link_guide_route(
     if end and not route.end_date:
         route.end_date = end
 
+    # 1) 先铺这条记忆自己认出来的多个地点：一趟跑了几处，就按顺序连成线
+    spot_points = _memory_spot_points(db, memory)
+    for spot in spot_points:
+        if any(_name_close(p.name, spot["name"]) for p in route.points):
+            continue
+        point = RoutePoint(
+            route_id=route.id,
+            sort=len(route.points),
+            name=spot["name"][:128],
+            latitude=spot["lat"],
+            longitude=spot["lng"],
+            arrive_date=spot["day"],
+            stay_days=1,
+            memory_id=memory.id,
+        )
+        db.add(point)
+        route.points.append(point)
+
+    # 2) 同城其它记忆补点，把这一天走的路补满
     points = _trip_points(db, user, memory, place, city, start, end)
     for loc, mem, day in points:
         if any(_route_point_matches(p, loc) for p in route.points):

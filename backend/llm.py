@@ -498,7 +498,6 @@ def generate_memory_fields(
 
 
 SPOT_PROMPT = """你是旅游照片的地点识别器，服务对象在中国，绝大多数照片拍的是中国境内。
-
 步骤（不要输出过程，只用于你自己判断）：
 1. 先看画面里的硬线索：地标外形、城楼/城墙/塔/桥/宫殿样式、店招和路牌文字、文字字体、车牌、地貌（丹霞、喀斯特、草原、戈壁）、植被、建筑风格
 2. 再判断这是哪一处景点：像八达岭长城、故宫、兵马俑、西湖、鼓浪屿、张家界、九寨沟、布达拉宫、泰山、黄山这类国家级景点，只要是就一定要报出来，不要含糊
@@ -619,6 +618,88 @@ def identify_spot(image_path: Path) -> dict | None:
     except Exception as exc:
         print("[DeepSeek] identify_spot failed:", exc)
         return None
+
+
+SPOTS_PROMPT = """你是旅游照片的行程识别器。用户一次上传了一组照片，可能来自同一趟旅行的不同地方。
+
+按顺序看每一张，判断它拍的是哪儿：
+- 先看硬线索：地标外形、城墙/塔/桥/宫殿样式、店招与路牌文字、车牌、地貌、植被、建筑风格
+- 能认出具体景点就写景点名（如「鼓浪屿」「故宫」「五花海」），只认得出城市就写城市名，两样都不确定就留空
+- 不要编造，不要为了凑数把同一处地方写成两个名字
+
+另外，如果用户写了要点（notes），以要点为准补充或纠正地点。
+
+只输出一个 JSON，不要解释、不要代码块：
+{"spots":[{"index":1,"spot":"第一张里的地点","city":"所在城市","confidence":0.8}]}
+index 对应你看到的第几张，认不出的那张不要写进数组。"""
+
+
+def identify_route_spots(image_paths: list[Path], notes: str | None = None) -> list[dict]:
+    """一次上传里认出多个地点（用来把路线连成多站）
+
+    实测：一次把多张图塞给模型，它只会认真看第一张，后面的基本被忽略；
+    所以这里改成「抽样 + 逐张识别（并发）」，再把重复的地点合并。
+    返回 [{"spot": 名称, "city": 城市, "confidence": 0-1}]，按照片顺序、去重；
+    一张都认不出来就返回空列表，绝不硬凑。
+    """
+    if not available() or not image_paths:
+        return []
+
+    paths = [p for p in image_paths if p]
+    if not paths:
+        return []
+    # 最多看 4 张，首尾都要顾到（一趟旅行常常第一张是出发、最后一张是目的地）
+    if len(paths) > 4:
+        step = (len(paths) - 1) / 3
+        paths = [paths[round(i * step)] for i in range(4)]
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    results: list[dict | None] = [None] * len(paths)
+    try:
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            futures = {pool.submit(identify_spot, p): i for i, p in enumerate(paths)}
+            for future, index in futures.items():
+                try:
+                    results[index] = future.result()
+                except Exception as exc:  # noqa: BLE001
+                    print("[spots] 单张识别失败:", exc)
+    except Exception as exc:  # noqa: BLE001
+        print("[spots] 并发识别失败:", exc)
+        return []
+
+    out: list[dict] = []
+    seen: set[str] = set()
+    entries: list[dict] = []
+    for index, info in enumerate(results):
+        if not info:
+            continue
+        name = str(info.get("spot") or "").strip()
+        city = str(info.get("city") or "").strip()
+        label = name or city
+        if not label:
+            continue
+        try:
+            conf = float(info.get("confidence") or 0)
+        except (TypeError, ValueError):
+            conf = 0.0
+        entries.append({"index": index, "spot": label, "city": city, "confidence": conf})
+
+    # 低置信度的猜测（比如把自拍认成某座城市）会污染路线：只留 0.3 以上的，
+    # 一个都没有时退而保留最像的那条，至少不空手。
+    strong = [e for e in entries if e["confidence"] >= 0.3]
+    if not strong and entries:
+        strong = [max(entries, key=lambda e: e["confidence"])]
+
+    for entry in sorted(strong, key=lambda e: e["index"]):
+        label = entry["spot"]
+        if label in seen:
+            continue
+        seen.add(label)
+        out.append({"spot": label, "city": entry["city"], "confidence": entry["confidence"]})
+        if len(out) >= 6:
+            break
+    return out
 
 
 SPOT_INTRO_PROMPT = """你是旅行编辑。用 2–3 句中文介绍一个景点，写给第一次听说它的人：

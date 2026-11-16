@@ -11,6 +11,8 @@ _ADD_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("transport_info", "TEXT NULL"),
         ("stay_info", "TEXT NULL"),
         ("tips", "TEXT NULL"),
+        # 一批照片里认出来的多个地点（JSON 数组），用来把路线连成多站
+        ("spots_json", "TEXT NULL"),
     ],
     "guide_days": [("image_url", "VARCHAR(512) NULL")],
     "users": [
