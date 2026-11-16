@@ -468,7 +468,10 @@ export default function LoginPage() {
                         <MapPin className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
                         <input
                           value={homeCity}
-                          onChange={(e) => setHomeCity(sanitizeCity(e.target.value))}
+                          onChange={(e) => {
+                            setError("");
+                            setHomeCity(sanitizeCity(e.target.value));
+                          }}
                           onBlur={() => setHomeCity((v) => v.trim())}
                           inputMode="text"
                           autoComplete="off"
