@@ -12,12 +12,23 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 import llm
+import cities
 import spot_guide
 from auth import can_view, optional_user
 from db import get_db
 from models import GuideDay, Location, Memory, MemoryPerson, MemoryVisit, Person, TravelGuide, User
+from routes_weather import weather as _current_weather
 
 router = APIRouter(prefix="/api", tags=["小拾 AI"])
+
+# 「今天适合去哪」「要不要带伞」这类问题，先看天气再说话
+_WEATHER_Q_RE = re.compile(
+    r"(天气|气温|几度|多少度|下雨|下雪|带伞|冷不冷|热不热|穿什么|"
+    r"适合.{0,4}(去哪|去哪里|去哪儿|出去|出门|逛逛|玩|走走)|"
+    r"(能|可以).{0,2}(出门|出去))"
+)
+
+_RAINY = {"下雨", "阵雨", "雷雨", "毛毛雨", "下雪", "阵雪", "有雾"}
 
 _STOPWORDS = {
     "什么", "怎么", "哪些", "哪个", "什么时候", "有没有", "我的", "你的", "帮我", "请问",
@@ -559,6 +570,122 @@ def _evidence_cards(db: Session, memory_ids: list[str], guides: dict[str, str]) 
     return merged
 
 
+# ---------- 问句里带天气时：先查实时天气，再结合自己的足迹回答 ----------
+
+def _city_from_question(text: str) -> str | None:
+    """问句里点名的城市（取最长匹配，避免「上海」把「海」也带进来）"""
+    if not text:
+        return None
+    hits = [name for name in cities.CITY_NAMES if name in text]
+    return max(hits, key=len) if hits else None
+
+
+def _same_city(a: str | None, b: str | None) -> bool:
+    left, right = (a or "").strip(), (b or "").strip()
+    if not left or not right:
+        return False
+    return cities._norm(left) == cities._norm(right) or left in right or right in left
+
+
+def _spots_in_city(db: Session, user_id: str | None, city: str, state: str, limit: int = 3) -> list[str]:
+    """我在某座城市的「想去」或「去过」地点"""
+    if not user_id or not city:
+        return []
+    rows = db.execute(
+        select(Location.name, Location.city)
+        .join(Memory, Memory.location_id == Location.id)
+        .where(Memory.user_id == user_id)
+        .order_by(Memory.happened_at.desc())
+    ).all()
+    visited = [name for name, loc_city in rows if name and _same_city(loc_city, city)]
+
+    if state == "visited":
+        out, seen = [], set()
+        for name in visited:
+            if name in seen:
+                continue
+            seen.add(name)
+            out.append(name)
+        return out[:limit]
+
+    # 想去：只算用户自己标记过的
+    marks = db.execute(
+        select(Location.name, Location.city)
+        .join(Memory, Memory.location_id == Location.id)
+        .join(MemoryVisit, MemoryVisit.memory_id == Memory.id)
+        .where(MemoryVisit.user_id == user_id, MemoryVisit.state == "wish")
+    ).all()
+    out, seen = [], set()
+    for name, loc_city in marks:
+        if not name or name in seen or not _same_city(loc_city, city):
+            continue
+        seen.add(name)
+        out.append(name)
+    return out[:limit]
+
+
+def _short_names(names: list[str], city: str, limit: int = 3) -> list[str]:
+    """把「北京 天安门广场」这类长名字收成「天安门广场」，并去掉互相包含的重复项"""
+    out: list[str] = []
+    for raw in names:
+        name = re.sub(r"\s+", "", raw or "").replace(city, "")
+        if not name:
+            continue
+        if any(name in kept or kept in name for kept in out):
+            continue
+        out.append(name)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _weather_reply(w: dict, city: str, wish: list[str], been: list[str], question: str = "") -> str:
+    temp = w.get("temperature")
+    text = (w.get("text") or "").strip() or "说不上什么天气"
+    hi, lo = w.get("high"), w.get("low")
+
+    head = f"{city}现在 {temp}°，{text}"
+    if hi is not None and lo is not None:
+        head += f"，今天 {lo}°～{hi}°"
+
+    rainy = text in _RAINY or "雨" in text or "雪" in text
+    asks_umbrella = "伞" in question
+
+    if rainy:
+        advice = "这种天气适合待在室内：商场、展馆、咖啡店都行；真要出门，伞别忘。"
+    elif temp is not None and temp >= 32:
+        advice = "白天太晒，早上或者傍晚再出门，水带上。"
+    elif temp is not None and temp >= 27:
+        advice = "有点热，避开正午那一段，傍晚出去最舒服。"
+    elif temp is not None and temp <= 10:
+        advice = "外面挺冷，穿厚一点，中午前后出门舒服些。"
+    elif temp is not None and temp <= 16:
+        advice = "偏凉，加件外套就没问题。"
+    elif hi is not None and lo is not None and hi - lo >= 10:
+        advice = "早晚温差大，带件外套就能出门。"
+    else:
+        advice = "温度合适，正适合出去走一走。"
+
+    if asks_umbrella and not rainy:
+        advice += "现在没下雨，伞可以不带。"
+
+    clean_wish = _short_names(wish, city)
+    clean_been = _short_names(been, city)
+    tail = ""
+    if clean_wish:
+        picked = "、".join(clean_wish)
+        tail = (
+            f"「想去」清单里的{picked}先留着，等天晴再去。"
+            if rainy
+            else f"你的「想去」清单里还留着{picked}，今天挑一个正合适。"
+        )
+    elif clean_been:
+        tail = f"你在这座城市记过{'、'.join(clean_been)}，照着再走一遍也不错。"
+    else:
+        tail = f"你还没在{city}留下记录，今天出去正好补一条。"
+    return f"{head}。{advice}{tail}"
+
+
 @router.post("/assistant/query")
 def assistant_query(
     payload: QuestionIn,
@@ -589,6 +716,7 @@ def assistant_query(
 
     place_check = None
     places = None
+    place = None
     try:
         # 本轮没提到地名时，用上文最近提到的地点兜底（「那次是几月」要沿用厦门）
         place = _detect_place(question, db) or (_detect_place(history_text, db) if history_text else None)
@@ -598,6 +726,43 @@ def assistant_query(
     except Exception as exc:  # noqa: BLE001
         print("[assistant] 地点核查失败:", exc)
     hint = _place_hint(place_check, places)
+
+    # 问到天气 / 「今天适合去哪」：先取实时天气，再把手上的足迹揉进去回答。
+    # 这一类是数据问题，直接算答案比让模型猜更靠谱，也快。
+    if _WEATHER_Q_RE.search(search_text):
+        try:
+            asked_city = _city_from_question(question) or _city_from_question(history_text)
+            place_city = place.city.strip() if place is not None and place.city else None
+            own_city = None
+            if viewer is not None:
+                own_city = (viewer.weather_city or viewer.home_city or "").strip() or None
+
+            candidates: list[str] = []
+            for cand in (asked_city, place_city, own_city):
+                if cand and cand not in candidates:
+                    candidates.append(cand)
+
+            for city in candidates:
+                w = _current_weather(city)
+                if not w or not w.get("ok"):
+                    print("[assistant] 天气没取到:", city, w)
+                    continue
+                uid = viewer.id if viewer is not None else None
+                wish = _spots_in_city(db, uid, city, "wish")
+                been = _spots_in_city(db, uid, city, "visited")
+                return {
+                    "answer": _weather_reply(w, city, wish, been, question),
+                    "evidenceMemoryIds": [],
+                    "evidenceGuideIds": {},
+                    "evidenceCards": [],
+                    "placeCheck": place_check,
+                    "places": places,
+                    "weather": {**w, "city": city, "wish": wish, "been": been},
+                    "model": "weather",
+                    "fallback": False,
+                }
+        except Exception as exc:  # noqa: BLE001
+            print("[assistant] 天气回答失败:", exc)
 
     memories = _pick_relevant(search_text, db, viewer.id if viewer else None)
     result = llm.answer_memory_question(question, memories, hint, history)
