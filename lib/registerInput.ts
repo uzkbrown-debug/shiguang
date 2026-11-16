@@ -25,6 +25,28 @@ export function cityProblem(raw: string): string {
   return "";
 }
 
+export type CityStatus = "idle" | "checking" | "ok" | "unknown" | "unavailable";
+
+/** 问后端这座城市到底存不存在（内置城市表 + 高德行政区搜索） */
+export async function checkCity(raw: string): Promise<{ status: CityStatus; name: string }> {
+  const v = (raw || "").trim();
+  if (!v) return { status: "ok", name: "" };
+  const blank = cityProblem(v);
+  if (blank) return { status: "unknown", name: v };
+  try {
+    const res = await fetch(`/api/weather/city-check?name=${encodeURIComponent(v)}`, {
+      cache: "no-store",
+    });
+    if (!res.ok) return { status: "unavailable", name: v };
+    const data = (await res.json()) as { status?: string; name?: string };
+    const status: CityStatus =
+      data.status === "ok" ? "ok" : data.status === "unknown" ? "unknown" : "unavailable";
+    return { status, name: (data.name || v).trim() };
+  } catch {
+    return { status: "unavailable", name: v };
+  }
+}
+
 /** 随机数字账号：首位非 0，默认 8 位（不超过十位） */
 export function randomAccount(len = 8): string {
   const n = Math.min(Math.max(Math.round(len), 3), 10);

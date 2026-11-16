@@ -23,7 +23,7 @@ import {
   Dices,
 } from "lucide-react";
 import { fetchMe, login, register, uploadAvatar } from "@/lib/session";
-import { cityProblem, randomAccount, sanitizeCity } from "@/lib/registerInput";
+import { checkCity, cityProblem, randomAccount, sanitizeCity, type CityStatus } from "@/lib/registerInput";
 
 type Mode = "login" | "register" | "forgot";
 
@@ -69,6 +69,7 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [resetStep, setResetStep] = useState<"ask" | "verify">("ask");
   const [askedQuestion, setAskedQuestion] = useState("");
+  const [cityStatus, setCityStatus] = useState<CityStatus>("idle");
 
   // 头像
   const fileRef = useRef<HTMLInputElement>(null);
@@ -90,6 +91,27 @@ export default function LoginPage() {
     },
     [avatarPreview],
   );
+
+  // 城市边打边问：是不是真有这座城市（停手 420ms 才发请求）
+  useEffect(() => {
+    const value = homeCity.trim();
+    if (mode !== "register" || value.length < 2) {
+      const reset = setTimeout(() => setCityStatus("idle"), 0);
+      return () => clearTimeout(reset);
+    }
+    let alive = true;
+    const timer = setTimeout(() => {
+      if (alive) setCityStatus("checking");
+      checkCity(value).then((r) => {
+        if (!alive) return;
+        setCityStatus(r.status === "ok" ? "ok" : r.status === "unknown" ? "unknown" : "unavailable");
+      });
+    }, 420);
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, [homeCity, mode]);
 
   const go = (next: Mode) => {
     setMode(next);
@@ -120,6 +142,7 @@ export default function LoginPage() {
     if (loading) return;
     setError("");
     setNotice("");
+    let cityToSend = homeCity.trim();
 
     if (mode !== "login" && !agree) {
       setError("请先同意用户协议");
@@ -131,6 +154,20 @@ export default function LoginPage() {
       if (bad) {
         setError(bad);
         return;
+      }
+      // 城市得真的存在：认不出来就不让注册
+      if (homeCity.trim()) {
+        const city = await checkCity(homeCity);
+        if (city.status === "unknown") {
+          setCityStatus("unknown");
+          setError(`「${homeCity.trim()}」不是一个城市名，换成真正的城市试试，比如 上海 / 杭州`);
+          return;
+        }
+        if (city.status === "ok" && city.name) {
+          setCityStatus("ok");
+          setHomeCity(city.name);
+          cityToSend = city.name;
+        }
       }
     }
 
@@ -149,7 +186,7 @@ export default function LoginPage() {
           username: username.trim(),
           password,
           nickname: nickname.trim() || undefined,
-          home_city: homeCity.trim() || undefined,
+          home_city: cityToSend || undefined,
           security_question: question,
           security_answer: answer.trim(),
         });
@@ -440,8 +477,20 @@ export default function LoginPage() {
                           className={`${inputClass} pl-10 pr-4`}
                         />
                       </span>
-                      <span className="mt-1 block text-[10px] text-slate-500">
-                        只填城市名（汉字或字母），数字和符号打不进去
+                      <span
+                        className={`mt-1 block text-[10px] ${
+                          cityStatus === "ok"
+                            ? "text-emerald-400"
+                            : cityStatus === "unknown"
+                              ? "text-rose-400"
+                              : "text-slate-500"
+                        }`}
+                      >
+                        {cityStatus === "checking" && "查一下这座城市…"}
+                        {cityStatus === "ok" && `✓ 认出来了：${homeCity.trim() || "未填"}`}
+                        {cityStatus === "unknown" && "没查到这座城市，换成真正的城市名试试（上海 / 杭州）"}
+                        {cityStatus === "unavailable" && "城市库暂时连不上，先填着，之后在设置里还能改"}
+                        {cityStatus === "idle" && "只填城市名（汉字或字母），数字和符号打不进去"}
                       </span>
                     </label>
                   </motion.div>

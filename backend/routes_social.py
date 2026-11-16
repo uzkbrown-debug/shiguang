@@ -24,6 +24,7 @@ from auth import (
     verify_password,
 )
 from config import MEDIA_DIR
+from cities import resolve_city
 from db import get_db
 import reactions
 from models import (
@@ -48,8 +49,22 @@ def clean_city(raw: str | None) -> str | None:
     """城市名只留汉字、字母、空格和间隔号；数字和符号直接丢掉"""
     if not raw:
         return None
-    value = _CITY_OK.sub("", raw).strip()[:12]
+    value = _CITY_OK.sub("", raw).strip()[:16]
     return value or None
+
+
+def validate_city(raw: str | None) -> str | None:
+    """清洗 + 校验：认得出这座城才返回名字，认不出抛 400
+
+    高德这次问不通（status=unavailable）就放行，不拿网络问题卡住注册。
+    """
+    value = clean_city(raw)
+    if not value:
+        return None
+    city, status = resolve_city(value)
+    if status == "unknown":
+        raise HTTPException(400, f"「{value}」不是一个城市名，换成城市试试，比如 上海 / 杭州")
+    return city or value
 
 
 # ---------- 序列化 ----------
@@ -205,9 +220,7 @@ def register(body: RegisterBody, response: Response, db: Session = Depends(get_d
     if db.scalar(select(User).where(User.username == username)):
         raise HTTPException(409, "这个账号已经注册过了")
 
-    home_city = clean_city(body.home_city)
-    if body.home_city and body.home_city.strip() and not home_city:
-        raise HTTPException(400, "常驻城市只能填城市名，不能有数字")
+    home_city = validate_city(body.home_city)
 
     salt = new_salt()
     answer_salt = new_salt() if body.security_answer else None
@@ -371,7 +384,7 @@ def update_me(body: ProfileBody, db: Session = Depends(get_db), user: User = Dep
     if body.about is not None:
         user.about = body.about.strip()[:8000] or None
     if body.home_city is not None:
-        user.home_city = clean_city(body.home_city)
+        user.home_city = validate_city(body.home_city)
     if body.weather_city is not None:
         user.weather_city = body.weather_city.strip()[:32] or None
     db.commit()

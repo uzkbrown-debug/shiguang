@@ -24,7 +24,7 @@ import {
   type MeUser,
 } from "@/lib/session";
 import { fetchGuides, fetchRoutes, type GuideBrief, type TravelRouteItem } from "@/lib/travel";
-import { cityProblem, sanitizeCity } from "@/lib/registerInput";
+import { checkCity, cityProblem, sanitizeCity } from "@/lib/registerInput";
 
 interface CircleMemory {
   id: string;
@@ -179,10 +179,22 @@ export default function UserProfilePage({ params }: { params: Promise<{ id: stri
       setError(badCity);
       return;
     }
+    let cityToSend = homeCity.trim();
+    if (cityToSend) {
+      const city = await checkCity(cityToSend);
+      if (city.status === "unknown") {
+        setError(`「${cityToSend}」不是一个城市名，换成本市/省的名字试试，比如 上海`);
+        return;
+      }
+      if (city.status === "ok" && city.name) {
+        cityToSend = city.name;
+        setHomeCity(city.name);
+      }
+    }
     setSaving(true);
     setError("");
     try {
-      await patchMe({ nickname, username, bio, home_city: homeCity.trim(), about, banner });
+      await patchMe({ nickname, username, bio, home_city: cityToSend, about, banner });
       setEditing(false);
       load();
     } catch (e) {

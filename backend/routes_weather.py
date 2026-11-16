@@ -195,6 +195,18 @@ def search_cities(q: str = Query(..., min_length=1, max_length=32)):
     return rows[:10]
 
 
+@router.get("/weather/city-check")
+def check_city(name: str = Query(..., min_length=1, max_length=32)):
+    """这个写法是不是一座（存在的）城市
+
+    status: ok 认出来 / unknown 查不到 / unavailable 这次问不通高德
+    """
+    from cities import resolve_city
+
+    city, status = resolve_city(name)
+    return {"input": name, "name": city or name, "status": status}
+
+
 @router.get("/weather")
 def weather(city: str = Query("泉州", max_length=32)):
     """返回当前天气 + 今日高低温；城市查不到 / 网络不通就返回 ok=false"""
