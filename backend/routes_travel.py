@@ -104,6 +104,129 @@ def _route_point_matches(p: RoutePoint, loc: Location) -> bool:
     return False
 
 
+# ---------- 攻略 ↔ 路线：从记忆写出来的攻略，也要有一条能在地图上走的线 ----------
+
+def _memory_place(db: Session, memory: Memory) -> tuple[str, str]:
+    """这条记忆落在哪：地点名 + 城市名（地点缺失时用「路上」兜底）"""
+    loc = db.get(Location, memory.location_id) if memory.location_id else None
+    place = (loc.name if loc else "").strip() or "路上"
+    city = _clean_city(loc.city if loc else "") or (_clean_city(place) if loc is None else "")
+    return place, city
+
+
+def _trip_points(
+    db: Session,
+    user: User,
+    memory: Memory,
+    place: str,
+    city: str,
+    start: str | None,
+    end: str | None,
+) -> list[tuple[Location, Memory, str | None]]:
+    """这一趟能落到地图上的点：同城 / 同地点、日期落在行程窗口里的、自己的记忆
+
+    只有一条记忆时就是单点（地图上仍然有标记、有路线卡片）；
+    同城同期的几条记忆会按日期排成一条真线。
+    """
+    rows = db.execute(
+        select(Memory, Location)
+        .join(Location, Location.id == Memory.location_id)
+        .where(Memory.user_id == user.id)
+        .order_by(Memory.happened_at)
+    ).all()
+
+    picked: list[tuple[Location, Memory, str | None]] = []
+    seen: set[str] = set()
+    for mem, loc in rows:
+        if loc.latitude is None or loc.longitude is None:
+            continue
+        same_city = bool(city) and _clean_city(loc.city or "") == city
+        same_place = (loc.name or "").strip() == place
+        if not (same_city or same_place):
+            continue
+        day = (mem.happened_at or "")[:10] or None
+        if start and end and day and (day < start or day > end):
+            continue
+        key = loc.id or (loc.name or "")
+        if key in seen:
+            continue
+        seen.add(key)
+        picked.append((loc, mem, day))
+
+    if not picked and memory.location_id:
+        loc = db.get(Location, memory.location_id)
+        if loc and loc.latitude is not None and loc.longitude is not None:
+            picked.append((loc, memory, (memory.happened_at or "")[:10] or None))
+    return picked
+
+
+def link_guide_route(
+    db: Session,
+    memory: Memory,
+    user: User,
+    guide: TravelGuide,
+    start: str | None = None,
+    end: str | None = None,
+) -> TravelRoute | None:
+    """给攻略配一条路线：已经有就复用，没有就建一条，并把这一趟的点补齐
+
+    之前的坑：上传写完攻略，guide.route_id 一直是 None，攻略页不显示路线，
+    地图和旅行页也看不到这条线——三处各说各话。这里一次性接上。
+    """
+    place, city = _memory_place(db, memory)
+
+    route = db.get(TravelRoute, guide.route_id) if guide.route_id else None
+    if route is None:
+        # 同城同名地点已经有路线就接过去，避免每次上传都多一条线
+        route = db.scalar(
+            select(TravelRoute)
+            .options(selectinload(TravelRoute.points))
+            .where(TravelRoute.user_id == user.id, TravelRoute.title.like(f"%{place}%"))
+            .order_by(TravelRoute.created_at.desc())
+        )
+    if route is None:
+        route = TravelRoute(
+            id="rt_" + uuid.uuid4().hex[:10],
+            user_id=user.id,
+            title=(place if (guide.day_count or 1) <= 1 else f"{place} {guide.day_count} 天")[:255],
+            summary=(guide.summary or "").strip()[:300] or None,
+            cover=guide.cover,
+            start_date=start,
+            end_date=end,
+            tags=json.dumps([city] if city else [], ensure_ascii=False),
+            visibility=guide.visibility or "friends",
+        )
+        db.add(route)
+        db.flush()
+
+    if start and not route.start_date:
+        route.start_date = start
+    if end and not route.end_date:
+        route.end_date = end
+
+    points = _trip_points(db, user, memory, place, city, start, end)
+    for loc, mem, day in points:
+        if any(_route_point_matches(p, loc) for p in route.points):
+            continue
+        point = RoutePoint(
+            route_id=route.id,
+            sort=len(route.points),
+            name=(loc.name or place)[:128],
+            location_id=loc.id,
+            latitude=loc.latitude,
+            longitude=loc.longitude,
+            arrive_date=day,
+            stay_days=1,
+            memory_id=mem.id,
+        )
+        db.add(point)
+        route.points.append(point)
+    db.flush()
+
+    guide.route_id = route.id
+    return route
+
+
 # ---------- 序列化 ----------
 
 def point_dict(p: RoutePoint) -> dict:
@@ -689,6 +812,13 @@ def guide_from_memory(
         guide.cover = memory.cover
     if not guide.summary:
         guide.summary = "\n".join(x for x in (head, walk) if x) or memory.summary
+    db.flush()
+
+    # 攻略写完了，顺手把「这一趟的路线」接上：地图 / 旅行 / 攻略页三处看到的是同一条线
+    trip_dates = sorted({(m.captured_at or "")[:10] for m in media_rows if m.captured_at})
+    start = (memory.happened_at or "")[:10] or (trip_dates[0] if trip_dates else None)
+    end = trip_dates[-1] if trip_dates else start
+    link_guide_route(db, memory, user, guide, start, end)
     db.flush()
     return guide
 

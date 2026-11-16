@@ -139,8 +139,12 @@ def visible_owner_ids(db: Session, viewer: User | None, scope: str | None = "all
     if scope == "me":
         return mine
     # 「好友」只看好友，不含自己：自己那份在「只看我」里
-    if scope in (None, "", "all", "friends"):
+    if scope in ("friends", None, ""):
         return [f for f in friends if f != viewer.id]
+    if scope == "all":
+        # 「全部」= 我 + 好友。攻略 / 路线列表按这个档拉，
+        # 漏了自己就会出现「刚生成完的攻略和路线看不见」的怪现象。
+        return sorted(set(mine) | set(friends))
     if scope.startswith("u:"):
         target = scope[2:]
         if target == viewer.id or target in friends:
