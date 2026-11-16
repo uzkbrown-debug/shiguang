@@ -20,8 +20,10 @@ import {
   Sparkles,
   Compass,
   Images,
+  Dices,
 } from "lucide-react";
 import { fetchMe, login, register, uploadAvatar } from "@/lib/session";
+import { cityProblem, randomAccount, sanitizeCity } from "@/lib/registerInput";
 
 type Mode = "login" | "register" | "forgot";
 
@@ -122,6 +124,14 @@ export default function LoginPage() {
     if (mode !== "login" && !agree) {
       setError("请先同意用户协议");
       return;
+    }
+
+    if (mode === "register") {
+      const bad = cityProblem(homeCity);
+      if (bad) {
+        setError(bad);
+        return;
+      }
     }
 
     setLoading(true);
@@ -371,9 +381,27 @@ export default function LoginPage() {
                     inputMode={mode === "register" ? "numeric" : undefined}
                     autoComplete="username"
                     required
-                    placeholder={mode === "register" ? "账号只能用数字，例如 13800001234" : "请输入账号"}
-                    className={`${inputClass} pl-10 pr-4`}
+                    maxLength={mode === "register" ? 10 : undefined}
+                    placeholder={mode === "register" ? "3～10 位数字，或点右边随机" : "请输入账号"}
+                    className={`${inputClass} pl-10 ${mode === "register" ? "pr-24" : "pr-4"}`}
                   />
+                  {mode === "register" && (
+                    <motion.button
+                      type="button"
+                      whileTap={{ scale: 0.94 }}
+                      onClick={() => {
+                        setUsername(randomAccount(8));
+                        setError("");
+                        setNotice("");
+                      }}
+                      title="随机生成一个 8 位数字账号"
+                      aria-label="随机生成账号"
+                      className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-cyan-400/15 border border-cyan-400/35 text-[10.5px] text-cyan-200 hover:bg-cyan-400/25 transition-colors"
+                    >
+                      <Dices className="w-3.5 h-3.5" />
+                      随机
+                    </motion.button>
+                  )}
                 </span>
               </label>
 
@@ -403,10 +431,17 @@ export default function LoginPage() {
                         <MapPin className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
                         <input
                           value={homeCity}
-                          onChange={(e) => setHomeCity(e.target.value)}
+                          onChange={(e) => setHomeCity(sanitizeCity(e.target.value))}
+                          onBlur={() => setHomeCity((v) => v.trim())}
+                          inputMode="text"
+                          autoComplete="off"
+                          maxLength={12}
                           placeholder="上海"
                           className={`${inputClass} pl-10 pr-4`}
                         />
+                      </span>
+                      <span className="mt-1 block text-[10px] text-slate-500">
+                        只填城市名（汉字或字母），数字和符号打不进去
                       </span>
                     </label>
                   </motion.div>

@@ -24,6 +24,7 @@ import {
   type MeUser,
 } from "@/lib/session";
 import { fetchGuides, fetchRoutes, type GuideBrief, type TravelRouteItem } from "@/lib/travel";
+import { cityProblem, sanitizeCity } from "@/lib/registerInput";
 
 interface CircleMemory {
   id: string;
@@ -173,10 +174,15 @@ export default function UserProfilePage({ params }: { params: Promise<{ id: stri
   };
 
   const save = async () => {
+    const badCity = cityProblem(homeCity);
+    if (badCity) {
+      setError(badCity);
+      return;
+    }
     setSaving(true);
     setError("");
     try {
-      await patchMe({ nickname, username, bio, home_city: homeCity, about, banner });
+      await patchMe({ nickname, username, bio, home_city: homeCity.trim(), about, banner });
       setEditing(false);
       load();
     } catch (e) {
@@ -453,9 +459,11 @@ export default function UserProfilePage({ params }: { params: Promise<{ id: stri
                     · 常驻
                     <input
                       value={homeCity}
-                      onChange={(e) => setHomeCity(e.target.value)}
+                      onChange={(e) => setHomeCity(sanitizeCity(e.target.value))}
+                      onBlur={() => setHomeCity((v) => v.trim())}
                       placeholder="城市"
-                      maxLength={32}
+                      inputMode="text"
+                      maxLength={12}
                       className="w-24 px-2 py-0.5 rounded-lg bg-white/60 dark:bg-white/5 border border-white/50 dark:border-white/10 text-[11px] text-slate-600 dark:text-slate-200 outline-none focus:border-emerald-400/60"
                     />
                   </span>

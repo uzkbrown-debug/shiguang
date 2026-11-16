@@ -1,5 +1,6 @@
 """账号、好友、用户资料接口"""
 import hmac
+import re
 import uuid
 from pathlib import Path
 
@@ -39,6 +40,16 @@ from models import (
 )
 
 router = APIRouter(prefix="/api", tags=["social"])
+
+_CITY_OK = re.compile(r"[^\u4e00-\u9fa5a-zA-Z·\s]")
+
+
+def clean_city(raw: str | None) -> str | None:
+    """城市名只留汉字、字母、空格和间隔号；数字和符号直接丢掉"""
+    if not raw:
+        return None
+    value = _CITY_OK.sub("", raw).strip()[:12]
+    return value or None
 
 
 # ---------- 序列化 ----------
@@ -194,6 +205,10 @@ def register(body: RegisterBody, response: Response, db: Session = Depends(get_d
     if db.scalar(select(User).where(User.username == username)):
         raise HTTPException(409, "这个账号已经注册过了")
 
+    home_city = clean_city(body.home_city)
+    if body.home_city and body.home_city.strip() and not home_city:
+        raise HTTPException(400, "常驻城市只能填城市名，不能有数字")
+
     salt = new_salt()
     answer_salt = new_salt() if body.security_answer else None
     user = User(
@@ -202,7 +217,7 @@ def register(body: RegisterBody, response: Response, db: Session = Depends(get_d
         nickname=(body.nickname or username).strip()[:24],
         password_hash=hash_password(body.password, salt),
         salt=salt,
-        home_city=(body.home_city or None),
+        home_city=home_city,
         security_question=(body.security_question or "").strip()[:32] or None,
         answer_hash=hash_password(body.security_answer.strip(), answer_salt) if answer_salt else None,
         answer_salt=answer_salt,
@@ -356,7 +371,7 @@ def update_me(body: ProfileBody, db: Session = Depends(get_db), user: User = Dep
     if body.about is not None:
         user.about = body.about.strip()[:8000] or None
     if body.home_city is not None:
-        user.home_city = body.home_city.strip()[:32] or None
+        user.home_city = clean_city(body.home_city)
     if body.weather_city is not None:
         user.weather_city = body.weather_city.strip()[:32] or None
     db.commit()
