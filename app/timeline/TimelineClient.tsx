@@ -76,6 +76,8 @@ export default function TimelineClient({
   const canDelete = (scope ?? "me") === "me";
   const [detail, setDetail] = useState<ShiguangMemory | null>(null);
   const [recallYear, setRecallYear] = useState<number | null>(null);
+  // 想回忆哪一年：默认跟着当前定位的年份走，也可以自己挑
+  const [playYear, setPlayYear] = useState<number | null>(null);
   const [personFilter, setPersonFilter] = useState<string>("all");
   const [locationFilter, setLocationFilter] = useState<string>("all");
   const [tagFilter, setTagFilter] = useState<string>("all");
@@ -403,13 +405,28 @@ export default function TimelineClient({
             时间长河
           </h1>
           {centerYear && (
-            <button
-              onClick={() => setRecallYear(centerYear)}
-              className="ml-auto flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-200/90 hover:bg-amber-200 text-slate-900 text-xs font-medium transition-colors"
-            >
-              <Play className="w-3.5 h-3.5" />
-              AI 回忆模式 · 播放 {centerYear}
-            </button>
+            <div className="ml-auto flex items-center gap-1.5">
+              <button
+                onClick={() => setRecallYear(playYear ?? centerYear)}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-200/90 hover:bg-amber-200 text-slate-900 text-xs font-medium transition-colors"
+                title="按选中的年份把那一年的记忆连着放一遍"
+              >
+                <Play className="w-3.5 h-3.5" />
+                AI 回忆模式 · 播放
+              </button>
+              <select
+                value={playYear ?? centerYear ?? ""}
+                onChange={(e) => setPlayYear(Number(e.target.value))}
+                aria-label="选择要回忆的年份"
+                className="px-2 py-2 rounded-xl bg-amber-200/90 hover:bg-amber-200 text-slate-900 text-xs font-medium outline-none cursor-pointer"
+              >
+                {[...years].sort((a, b) => b - a).map((y) => (
+                  <option key={y} value={y}>
+                    {y} 年
+                  </option>
+                ))}
+              </select>
+            </div>
           )}
           {/* 多张照片一次传进长河：传完自动回到这里 */}
           <button

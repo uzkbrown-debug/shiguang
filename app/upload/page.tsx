@@ -208,8 +208,20 @@ export default function UploadPage() {
     setStage("analyzing");
     setStepIndex(0);
     setError("");
+    // 把「写几行」里写的内容一起交给后端：用户在这里点过的年份/日期要算进时间线，
+    // 否则记忆会掉进上传当天那一年
+    const typedNotes = Array.from({ length: Math.max(dayCount, 1) }, (_, i) => {
+      const meta = dayMeta[i + 1] ?? EMPTY_DAY;
+      return [meta.title, meta.notes, meta.content].map((x) => (x ?? "").trim()).filter(Boolean).join("，");
+    })
+      .filter(Boolean)
+      .join("\n");
     try {
-      const res = await fetch(`/api/memories/${memoryId}/analyze`, { method: "POST" });
+      const res = await fetch(`/api/memories/${memoryId}/analyze`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(typedNotes ? { notes: typedNotes } : {}),
+      });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       const realSteps: StepInfo[] = data.steps ?? [];
@@ -797,7 +809,7 @@ export default function UploadPage() {
                             onChange={(e) =>
                               setDayMeta((m) => ({ ...m, [n]: { ...(m[n] ?? EMPTY_DAY), title: e.target.value } }))
                             }
-                            placeholder="例：坐飞机去北京见学姐"
+                            placeholder="例：2016年5月 · 坐飞机去北京见学姐"
                             className="mt-1 w-full px-2 py-1.5 rounded-lg bg-white/70 dark:bg-slate-900/50 border border-emerald-500/30 focus:border-emerald-500/70 text-[11px] font-medium text-slate-800 dark:text-slate-100 outline-none transition-colors placeholder:font-normal placeholder:text-slate-400/70"
                           />
                         </label>
@@ -815,7 +827,7 @@ export default function UploadPage() {
                             onChange={(e) =>
                               setDayMeta((m) => ({ ...m, [n]: { ...(m[n] ?? EMPTY_DAY), notes: e.target.value } }))
                             }
-                            placeholder="航班 / 和谁 / 吃了什么"
+                            placeholder="年份 / 航班 / 和谁 / 吃了什么（写年份就会归到那一年）"
                             className="mt-1 w-full px-2 py-1.5 rounded-lg bg-white/70 dark:bg-slate-900/50 border border-slate-400/25 focus:border-emerald-500/60 text-[11px] text-slate-700 dark:text-slate-200 outline-none transition-colors placeholder:text-slate-400/70"
                           />
                         </label>
