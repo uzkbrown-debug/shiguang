@@ -231,6 +231,13 @@ function MapInner() {
   const [allLines, setAllLines] = useState<MapLine[]>([]);
 
   useEffect(() => {
+    // 「全世界」这一档只画别人公开的足迹点：路线是各家自己的一趟行程，
+    // 摊到一张世界地图上就是一堆不知从哪连到哪的线，所以这一档不出线。
+    // 从攻略点进来的某一条路线（?route=）仍然单独画自己那一条。
+    if (scope === "world") {
+      const t = setTimeout(() => setAllLines([]), 0);
+      return () => clearTimeout(t);
+    }
     const routes = data?.routes ?? [];
     const usable = routes.filter((r) => r.points && r.points.length >= 2).slice(0, 12);
     if (!usable.length) {
@@ -264,7 +271,7 @@ function MapInner() {
       alive = false;
       clearTimeout(timer);
     };
-  }, [data, activeRouteId]);
+  }, [data, activeRouteId, scope]);
 
   const routeLine = useMemo<MapLine | null>(() => {
     if (!activeRoute || activeRoute.points.length < 2) return null;
@@ -441,6 +448,11 @@ function MapInner() {
             先说数：{total} 个足迹点 · {owners.length} 位记录者 · {guides.length} 条攻略 /{" "}
             {data?.routes?.length ?? 0} 条路线
             <span className="ml-2 opacity-70">点光点就能看这条的完整写法</span>
+            {scope === "world" && (
+              <span className="ml-2 opacity-70">
+                · 这一档只看足迹点，不画路线（进某条攻略才画它那一条）
+              </span>
+            )}
           </p>
           <button
             onClick={load}
