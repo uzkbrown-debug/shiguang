@@ -236,12 +236,24 @@ export default function XiaoshiAI() {
   useEffect(() => {
     try {
       const saved = localStorage.getItem(BALL_POS_KEY);
-      if (saved) {
-        const p = JSON.parse(saved) as { x: number; y: number };
-        if (typeof p.x === "number" && typeof p.y === "number") {
-          ballX.set(p.x);
-          ballY.set(p.y);
-        }
+      if (!saved) return;
+      const p = JSON.parse(saved) as { x: number; y: number };
+      // 球挂在右下角，只能往左 / 往上拖：正向位移只会把它推出屏幕。
+      // 所以只恢复「方向合法且仍在视口内」的坐标，其余一律当脏数据丢掉，回到默认角落。
+      const sane =
+        typeof p.x === "number" &&
+        typeof p.y === "number" &&
+        Number.isFinite(p.x) &&
+        Number.isFinite(p.y) &&
+        p.x <= 4 &&
+        p.y <= 4 &&
+        p.x >= -(window.innerWidth - 96) &&
+        p.y >= -(window.innerHeight - 96);
+      if (sane) {
+        ballX.set(p.x);
+        ballY.set(p.y);
+      } else {
+        localStorage.removeItem(BALL_POS_KEY);
       }
     } catch {
       /* ignore */
@@ -262,6 +274,30 @@ export default function XiaoshiAI() {
     ballX.set(nx);
     ballY.set(ny);
   };
+
+  // 挂载后和窗口尺寸变化时都把球夹回可视区：
+  // 球是「右下角 + 拖拽位移」定位的，窗口一变小（或上次存的坐标偏大）它就会被推到屏幕外，
+  // 用户看到的就是「小拾不见了」，所以这里必须兜一下。
+  // 入场有 scale 弹簧动画，量到的矩形前两帧还不准，所以多夹几次，最后一定落在可视区内。
+  useEffect(() => {
+    const fix = () => clampBall();
+    const onResize = () => {
+      fix();
+      window.requestAnimationFrame(fix);
+    };
+    window.addEventListener("resize", onResize);
+    window.addEventListener("orientationchange", onResize);
+    const raf = window.requestAnimationFrame(fix);
+    const timers = [120, 400, 900].map((ms) => window.setTimeout(fix, ms));
+    return () => {
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("orientationchange", onResize);
+      window.cancelAnimationFrame(raf);
+      timers.forEach((t) => window.clearTimeout(t));
+    };
+    // clampBall 只用 ref 与 motion value，不需要随渲染重建
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
