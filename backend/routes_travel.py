@@ -33,6 +33,11 @@ router = APIRouter(prefix="/api", tags=["travel"])
 
 VIS = ("private", "friends", "public")
 
+# 一趟行程的判定：两站直线超过这个距离就不算同一趟（天安门→青海湖 1451km 还留着）
+MAX_HOP_KM = 1600
+# 小于这个距离视为同一个地方（同一景区两种写法）
+DUP_KM = 3
+
 
 def _tags(raw: str | None) -> list[str]:
     try:
@@ -233,6 +238,38 @@ def _trip_points(
     return picked
 
 
+def _chain_filter(existing: list[RoutePoint], spots: list[dict], day: str | None = None) -> list[dict]:
+    """把「一趟行程」的站点筛出来：去掉同地重复点，也别把几百公里外的另一趟硬连进来
+
+    existing：路线里已经有的站点（续写同一条线时它才是起点）
+    """
+    kept: list[dict] = [
+        {
+            "name": p.name,
+            "lat": p.latitude,
+            "lng": p.longitude,
+            "day": p.arrive_date,
+        }
+        for p in existing
+        if p.latitude is not None and p.longitude is not None
+    ]
+    out: list[dict] = []
+    for spot in spots:
+        lat, lng = spot.get("lat"), spot.get("lng")
+        if lat is None or lng is None:
+            continue
+        point = (float(lat), float(lng))
+        # 同地重复（同一景区两种写法、或两张照片同一个地方）
+        if any(geo.haversine(point, (p["lat"], p["lng"])) < DUP_KM * 1000 for p in kept + out):
+            continue
+        # 和上一站差太远 → 当成另一趟旅行，不硬连
+        anchor = kept[-1] if kept else (out[-1] if out else None)
+        if anchor and geo.haversine(point, (anchor["lat"], anchor["lng"])) > MAX_HOP_KM * 1000:
+            continue
+        out.append({**spot, "day": spot.get("day") or day})
+    return out
+
+
 def link_guide_route(
     db: Session,
     memory: Memory,
@@ -287,39 +324,46 @@ def link_guide_route(
     if end and not route.end_date:
         route.end_date = end
 
-    # 1) 先铺这条记忆自己认出来的多个地点：一趟跑了几处，就按顺序连成线
-    spot_points = _memory_spot_points(db, memory)
-    for spot in spot_points:
-        if any(_name_close(p.name, spot["name"]) for p in route.points):
-            continue
-        point = RoutePoint(
-            route_id=route.id,
-            sort=len(route.points),
-            name=spot["name"][:128],
-            latitude=spot["lat"],
-            longitude=spot["lng"],
-            arrive_date=spot["day"],
-            stay_days=1,
-            memory_id=memory.id,
+    # 站点候选：先按这条记忆自己认出来的地点排（拍摄/要点顺序），再用同城其它记忆补点。
+    # 两类候选一起过 _chain_filter：同地去重、太远的另一趟不硬连，
+    # 免得出现「桂林 → 青海湖」这种 1900 公里的回头路。
+    candidates: list[dict] = []
+    for spot in _memory_spot_points(db, memory):
+        candidates.append(
+            {
+                "name": spot["name"],
+                "lat": spot["lat"],
+                "lng": spot["lng"],
+                "day": spot["day"],
+                "memory_id": memory.id,
+                "location_id": None,
+            }
         )
-        db.add(point)
-        route.points.append(point)
+    for loc, mem, day in _trip_points(db, user, memory, place, city, start, end):
+        candidates.append(
+            {
+                "name": loc.name or place,
+                "lat": loc.latitude,
+                "lng": loc.longitude,
+                "day": day,
+                "memory_id": mem.id,
+                "location_id": loc.id,
+            }
+        )
 
-    # 2) 同城其它记忆补点，把这一天走的路补满
-    points = _trip_points(db, user, memory, place, city, start, end)
-    for loc, mem, day in points:
-        if any(_route_point_matches(p, loc) for p in route.points):
+    for item in _chain_filter(route.points, candidates, (memory.happened_at or "")[:10] or None):
+        if any(_name_close(p.name, item["name"]) for p in route.points):
             continue
         point = RoutePoint(
             route_id=route.id,
             sort=len(route.points),
-            name=(loc.name or place)[:128],
-            location_id=loc.id,
-            latitude=loc.latitude,
-            longitude=loc.longitude,
-            arrive_date=day,
+            name=(item["name"] or "路上")[:128],
+            location_id=item.get("location_id"),
+            latitude=item["lat"],
+            longitude=item["lng"],
+            arrive_date=item.get("day"),
             stay_days=1,
-            memory_id=mem.id,
+            memory_id=item.get("memory_id"),
         )
         db.add(point)
         route.points.append(point)
