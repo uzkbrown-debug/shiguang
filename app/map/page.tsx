@@ -197,6 +197,8 @@ function MapInner() {
   );
 
   // 选中底部某条路线时，把这条线画出来，并让小人沿着走
+  const geoLineCache = new Map<string, [number, number][]>();
+
   const activeRoute = useMemo(
     () => (activeRouteId ? (data?.routes ?? []).find((r) => r.id === activeRouteId) ?? null : null),
     [data, activeRouteId],
@@ -224,6 +226,46 @@ function MapInner() {
     };
   }, [activeRouteId]);
 
+  // 所有路线的折线都预先取好（后端有缓存，很快），这样一进地图就能看见线，
+  // 不用先点某条路线才出现
+  const [allLines, setAllLines] = useState<MapLine[]>([]);
+
+  useEffect(() => {
+    const routes = data?.routes ?? [];
+    const usable = routes.filter((r) => r.points && r.points.length >= 2).slice(0, 12);
+    if (!usable.length) {
+      const t = setTimeout(() => setAllLines([]), 0);
+      return () => clearTimeout(t);
+    }
+    let alive = true;
+    const timer = setTimeout(async () => {
+      const next: MapLine[] = [];
+      await Promise.all(
+        usable.map(async (r) => {
+          const stops = r.points.map((p) => [p.latitude, p.longitude] as [number, number]);
+          let positions = geoLineCache.get(r.id) ?? null;
+          if (!positions) {
+            const g = await fetchRouteGeometry(r.id);
+            positions = g && g.points.length > 1 ? g.points : null;
+            geoLineCache.set(r.id, positions ?? smoothCurve(stops));
+          }
+          next.push({
+            id: r.id,
+            color: r.id === activeRouteId ? "#facc15" : "#3b82f6",
+            label: r.title,
+            positions: positions ?? smoothCurve(stops),
+            dashed: !positions,
+          });
+        }),
+      );
+      if (alive) setAllLines(next);
+    }, 0);
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, [data, activeRouteId]);
+
   const routeLine = useMemo<MapLine | null>(() => {
     if (!activeRoute || activeRoute.points.length < 2) return null;
     const stops = activeRoute.points.map((p) => [p.latitude, p.longitude] as [number, number]);
@@ -238,6 +280,11 @@ function MapInner() {
       dashed: !road,
     };
   }, [activeRoute, geo]);
+
+  const linesForMap = useMemo(() => {
+    const rest = allLines.filter((l) => l.id !== routeLine?.id);
+    return routeLine ? [...rest, routeLine] : rest;
+  }, [allLines, routeLine]);
 
   const [walking, setWalking] = useState(false);
   const [atStop, setAtStop] = useState<number | null>(null);
@@ -599,7 +646,7 @@ function MapInner() {
             ) : (
               <MemoryMap
                 pins={pins}
-                lines={routeLine ? [routeLine] : []}
+                lines={linesForMap}
                 selectedId={selected}
                 onSelect={setSelected}
                 focus={focus}
@@ -619,7 +666,7 @@ function MapInner() {
                     : null
                 }
                 onWalkerStop={(i) => setAtStop(i)}
-                fitLine={routeLine ? { id: routeLine.id, positions: routeLine.positions } : null}
+                fitLine={routeLine ? { id: routeLine.id, positions: routeLine.positions } : allLines.length ? { id: "all-routes", positions: allLines.flatMap((l) => l.positions) } : null}
               />
             )}
 

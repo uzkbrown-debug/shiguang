@@ -120,9 +120,22 @@ def driving_segment(
 # ---------- 抽稀：形状保住，点数砍掉 ----------
 
 def _simplify(points: list[list[float]], tol: float = 0.00035) -> list[list[float]]:
-    """Douglas-Peucker，容差按度算（0.00035° ≈ 35 米），去掉直路上的冗余点"""
+    """Douglas-Peucker，容差按度算（0.00035° ≈ 35 米），去掉直路上的冗余点
+
+    注意：闭环路线（终点回到起点）不能直接丢进来——首尾重合时那根「弦」长度为 0，
+    所有点的垂距都会算成 0，整条线会被简化成两个重合的点，地图上就画不出线了。
+    所以闭环先切成两半再各自简化。
+    """
     if len(points) < 3:
         return points
+    if _same(points[0], points[-1]) and len({tuple(p) for p in points}) > 2:
+        far = max(
+            range(1, len(points)),
+            key=lambda i: (points[i][0] - points[0][0]) ** 2 + (points[i][1] - points[0][1]) ** 2,
+        )
+        left = _simplify(points[: far + 1], tol)
+        right = _simplify(points[far:], tol)
+        return left[:-1] + right
     # 经度方向按纬度压缩一下，让它接近真实米制距离
     kx = math.cos(math.radians(sum(p[0] for p in points) / len(points)))
     pts = [(p[1] * kx, p[0]) for p in points]
@@ -200,6 +213,10 @@ def build_geometry(
         return [], total, "none"
 
     joined = _cap(_simplify(joined) or joined)
+    # 兜底：万一还是塌成同一个点，退回「站点连线」，至少地图上有线可画
+    if len({tuple(p) for p in joined}) < 3:
+        joined = [list(p) for p in stops]
+        return joined, round(total, 1), "straight"
     return joined, round(total, 1), ("amap" if ok == len(stops) - 1 else "mixed")
 
 
