@@ -199,7 +199,7 @@ npm run start
 | 项 | 值 |
 | --- | --- |
 | 地址 | <http://139.196.36.166>（HTTPS：<https://139.196.36.166>，自签证书需点一次「继续访问」） |
-| 环境 | 阿里云 ECS，2 核 / 1.6 GB 可用内存，Ubuntu 22.04 |
+| 环境 | 阿里云 ECS，2 核 2 GB，Ubuntu 22.04 |
 | 组成 | nginx（静态直出 + 反代）→ Next.js :3000 → FastAPI :8000 → MySQL 8 |
 | 运维细节 | 见 [`DEPLOY.md`](./DEPLOY.md)：为什么不在这台机器上 `next build`、MySQL 小内存参数、日志位置 |
 
